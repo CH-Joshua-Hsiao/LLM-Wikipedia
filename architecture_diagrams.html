@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>LLM Wiki Architecture Diagrams</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #ffffff;
+            color: #000000;
+            margin: 40px;
+        }
+        h1, h2 {
+            color: #111111;
+        }
+        .diagram-container {
+            margin-bottom: 60px;
+            page-break-inside: avoid;
+        }
+        /* Ensure mermaid html labels look nice */
+        .nodeLabel {
+            line-height: 1.4;
+            padding: 5px;
+        }
+        .nodeLabel i {
+            color: #333333;
+            font-size: 0.9em;
+        }
+    </style>
+    <!-- Include Mermaid.js -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script>
+        // High contrast initialization
+        mermaid.initialize({ 
+            startOnLoad: true, 
+            theme: 'default',
+            flowchart: {
+                htmlLabels: true
+            },
+            themeVariables: {
+                textColor: '#000000',
+                primaryTextColor: '#000000',
+                lineColor: '#000000',
+                nodeTextColor: '#000000'
+            }
+        });
+    </script>
+</head>
+<body>
+
+    <h1>System Architecture Diagrams</h1>
+
+    <div class="diagram-container">
+        <h2>1. Document Ingestion & Consolidation Workflow</h2>
+        <p>This diagram highlights how standard raw documents are ingested, conceptually parsed by the LLM, and intelligently consolidated into a growing knowledge graph natively offline.</p>
+        <div class="mermaid">
+            flowchart TD
+                classDef llm fill:#f9d0c4,stroke:#000,stroke-width:2px,color:#000;
+                classDef offline fill:#d4ede4,stroke:#000,stroke-width:2px,color:#000;
+                classDef db fill:#c4ddf9,stroke:#000,stroke-width:2px,color:#000;
+
+                doc["<b>Raw Document</b><br/><i>Ex: TSMC_Q1_Report.pdf</i>"]:::offline --> script["<b>wiki_agent.py</b><br/><i>Ex: runs `python wiki_agent.py ingest`</i>"]:::offline
+                script --> extract["<b>Local Parsing</b><br/><i>Ex: Convert PDF bytes to plain text</i>"]:::offline
+                extract --> llm_parse{"<b>LLM Contextual Extraction</b><br/><i>Ex: 'Identify primary companies from this text'</i>"}:::llm
+                llm_parse --> json["<b>Raw Entities JSON</b><br/><i>Ex: [{'filename': '台積電.md', 'content': '...'}]</i>"]:::offline
+                json --> iter["<b>Iterate Over Each Entity</b>"]:::offline
+                
+                iter --> check_db{"<b>Taxonomy Vector Check</b><br/><i>Ex: Does Postgres have a vector for '台積電'?</i>"}:::db
+                check_db --> |"Match found"| resolved["<b>Map to Canonical Name</b><br/><i>Ex: Translate internal route to 'TSMC.md'</i>"]:::offline
+                
+                resolved --> check_file{"<b>Check File DB</b><br/><i>Ex: Does pages/TSMC.md exist?</i>"}:::offline
+                check_file --> |"Yes"| archive["<b>Archive Local File</b><br/><i>Ex: Save TSMC_20260409.md to /archive</i>"]:::offline
+                archive --> llm_merge{"<b>LLM Smart Merge</b><br/><i>Ex: 'Weave Q1 revenue into the existing history'</i>"}:::llm
+                llm_merge --> extract_facts["<b>LLM Atomic Extraction</b><br/><i>Ex: Pull strict facts like 'Revenue grew 5%'</i>"]:::llm
+                
+                check_file --> |"No"| fresh["<b>Format New Document</b><br/><i>Ex: Apply # Headers locally</i>"]:::offline
+                fresh --> extract_facts
+                
+                extract_facts --> pg_vector["<b>Embed and Store Claims</b><br/><i>Ex: Insert vector into wiki_claims table</i>"]:::db
+                pg_vector --> save["<b>Save Final File</b><br/><i>Ex: Write to pages/TSMC.md</i>"]:::offline
+        </div>
+    </div>
+    
+    <div style="page-break-after: always;"></div>
+
+    <div class="diagram-container">
+        <h2>2. RAG Entity Alias Resolution Flow</h2>
+        <p>This microscopic diagram explains how the system translates alternative spellings into your canonical .md file name using vectors.</p>
+        <div class="mermaid">
+            flowchart LR
+                classDef llm fill:#f9d0c4,stroke:#000,stroke-width:2px,color:#000;
+                classDef db fill:#c4ddf9,stroke:#000,stroke-width:2px,color:#000;
+                classDef default fill:#f4f4f4,stroke:#000,stroke-width:2px,color:#000;
+                
+                raw["<b>Raw Name Extracted</b><br/><i>Ex: 'Taiwan Semi'</i>"] --> embed["<b>Hit nv-embed Endpoint</b><br/><i>Ex: Model generates coordinates</i>"]:::llm
+                embed --> vector["<b>Calculated Float Vector</b><br/><i>Ex: [0.12, -0.45...]</i>"]
+                
+                vector --> pg{"<b>Cosine Distance Lookup</b><br/><i>Ex: pgvector checks mathematical proximity < 0.15</i>"}:::db
+                pg --> |"No Matches"| new_db["<b>Insert New Name</b><br/><i>Ex: Added to Postgres</i>"]:::db
+                new_db --> final_new["<b>Save</b><br/><i>Ex: Taiwan_Semi.md</i>"]
+                
+                pg --> |"Found Matches"| verify{"<b>LLM Semantic Check</b><br/><i>Ex: 'Is Taiwan Semi identical to TSMC?'</i>"}:::llm
+                
+                verify --> |"LLM says YES"| map["<b>Map Strictly</b><br/><i>Ex: Bind to TSMC</i>"]
+                verify --> |"LLM says NO"| fail["<b>Insert New Name</b><br/><i>Ex: Added to Postgres</i>"]:::db
+                map --> final["<b>Save Intelligently</b><br/><i>Ex: TSMC.md</i>"]
+        </div>
+    </div>
+
+    <div style="page-break-after: always;"></div>
+
+    <div class="diagram-container">
+        <h2>3. The Dual-Linting Web Architecture</h2>
+        <p>This diagram displays the structural difference between daily hygiene Sub-Graph linting and deep systemic RAG Contradiction Audits.</p>
+        <div class="mermaid">
+            flowchart TD
+                classDef flag fill:#fef3c7,stroke:#000,stroke-width:2px,color:#000;
+                classDef llm fill:#f9d0c4,stroke:#000,stroke-width:2px,color:#000;
+                classDef db fill:#c4ddf9,stroke:#000,stroke-width:2px,color:#000;
+                classDef default fill:#f4f4f4,stroke:#000,stroke-width:2px,color:#000;
+
+                cmd{"<b>CLI Argument Hook</b><br/><i>Ex: python wiki_agent.py</i>"}:::flag
+                
+                cmd --> |"lint"| standard["<b>Find Modified Files</b><br/><i>Ex: Check OS timestamp for last 24h edits</i>"]
+                cmd --> |"lint --deep"| deep["<b>Ignore Filesystem Entirely</b><br/><i>Ex: Use database arrays only</i>"]
+                
+                standard --> regex{"<b>Regex Link Crawl</b><br/><i>Ex: Identify [ASML](ASML.md) tags</i>"}
+                regex --> isolate["<b>Isolate Dependency Ring</b><br/><i>Ex: Load ONLY TSMC.md and ASML.md</i>"]
+                isolate --> llm_grammar{"<b>LLM Syntax Error Review</b><br/><i>Ex: 'Fix this broken URL link formatting'</i>"}:::llm
+                
+                deep --> sql{"<b>SQL Vector Query </b><br/><i>Ex: Find semantic overlaps in DB</i>"}:::db
+                sql --> limit["<b>Fetch Suspicious Overlaps</b><br/><i>Ex: File A: 'CEO is John' & File B: 'CEO is Sarah'</i>"]
+                limit --> llm_logic{"<b>LLM Logical Interrogation</b><br/><i>Referee reads context as a human</i>"}:::llm
+                
+                llm_logic --> |"Unrelated Contexts"| false_alarm["<b>Drop Match</b> (False Positive)<br/><i>Ex: File A is Apple, File B is TSMC. LLM returns 'NO'.</i>"]
+                llm_logic --> |"True Contradiction"| alert["<b>Flag Contradiction</b><br/><i>Ex: Both files discuss Apple's CEO! LLM alerts you.</i>"]
+        </div>
+    </div>
+
+</body>
+</html>
