@@ -27,6 +27,9 @@ USAGE:
 
    python wiki_agent.py lint --deep [--openai]
    -> Deep RAG Audit: Mathematically audits PostgreSQL to root out systemic logical contradictions instantly!
+
+   python wiki_agent.py lint --fix [--openai]
+   -> Auto-Fix & Restructure: Iterates through all wiki pages to correct grammar and automatically upgrade old key-value files into rich Wikipedia-style sections.
 """
 
 import os
@@ -66,9 +69,14 @@ MODEL_NAME = "GPTOSS-120B"
 EMBED_MODEL = "nv-embed"
 PAGES_DIR = "pages"
 ARCHIVE_DIR = "archive"
-USE_OPENAI = False
+USE_OPENAI = True
 OPENAI_MODEL = "gpt-4o"
-DB_URL = os.environ.get("POSTGRES_DB_URL", "postgresql://postgres:password@localhost:5432/wiki_db")
+DB_URL = os.environ.get("POSTGRES_DB_URL", "postgresql://postgres:12345@localhost:5432/wiki_db")
+# docker run --name wiki-postgres -e POSTGRES_PASSWORD=12345 -e POSTGRES_USER=postgres -e POSTGRES_DB=wiki_db -p 5432:5432 -d pgvector/pgvector:pg16
+# Managing the Database later
+# To stop the database: docker stop wiki-postgres
+# To start it again: docker start wiki-postgres
+# To delete it (and its data): docker rm wiki-postgres -f
 
 # Ensure directories exist
 os.makedirs(PAGES_DIR, exist_ok=True)
@@ -77,7 +85,7 @@ os.makedirs(ARCHIVE_DIR, exist_ok=True)
 def query_llm(messages, system_prompt="You are a helpful assistant for managing a local knowledge base."):
     if USE_OPENAI:
         url = "https://api.openai.com/v1/chat/completions"
-        api_key = os.environ.get("OPENAI_API_KEY")
+        api_key = ""
         if not api_key:
             print("Error: OPENAI_API_KEY environment variable is missing! Export it before using --openai.")
             return None
@@ -117,7 +125,7 @@ def query_llm(messages, system_prompt="You are a helpful assistant for managing 
 def embed_text(text):
     if USE_OPENAI:
         url = "https://api.openai.com/v1/embeddings"
-        api_key = os.environ.get("OPENAI_API_KEY")
+        api_key = ""
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}"
@@ -149,6 +157,13 @@ def init_db():
                 id SERIAL PRIMARY KEY,
                 name TEXT UNIQUE NOT NULL,
                 embedding vector
+            );
+            """)
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS wiki_links (
+                source_file TEXT NOT NULL,
+                target_file TEXT NOT NULL,
+                PRIMARY KEY (source_file, target_file)
             );
             """)
             cur.execute("""
@@ -261,6 +276,48 @@ Document:
     finally:
         conn.close()
 
+def update_backlinks(filename, content):
+    """Parses new content for edges, upserts to DB, and rewrites target files locally."""
+    conn = init_db()
+    if not conn: return
+    
+    link_pattern = re.compile(r'\[.*?\]\(pages/(.*?\.md)\)')
+    targets = set(link_pattern.findall(content))
+    
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM wiki_links WHERE source_file = %s;", (filename,))
+            if targets:
+                for t in targets:
+                    cur.execute("INSERT INTO wiki_links (source_file, target_file) VALUES (%s, %s) ON CONFLICT DO NOTHING;", (filename, t))
+                    
+                # Now fetch backlinks for each target and append locally
+                for t in targets:
+                    cur.execute("SELECT source_file FROM wiki_links WHERE target_file = %s;", (t,))
+                    backlink_sources = [row[0] for row in cur.fetchall()]
+                    
+                    target_path = os.path.join(PAGES_DIR, t)
+                    if os.path.exists(target_path):
+                        with open(target_path, "r", encoding="utf-8") as f:
+                            t_content = f.read()
+                            
+                        # Remove existing Backlinks section if it exists to rewrite it cleanly
+                        parts = t_content.split("## Backlinks")
+                        main_body = parts[0].strip()
+                        
+                        if backlink_sources:
+                            backlink_section = "\n\n## Backlinks\n"
+                            for s in sorted(backlink_sources):
+                                display = s.replace(".md", "").replace("_", " ")
+                                backlink_section += f"- [{display}]({s})\n"
+                                
+                            with open(target_path, "w", encoding="utf-8") as f:
+                                f.write(main_body + backlink_section)
+    except Exception as e:
+        print(f"Error updating backlinks for {filename}: {e}")
+    finally:
+        conn.close()
+
 def log_action(action, details):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d")
     with open("log.md", "a", encoding="utf-8") as f:
@@ -321,18 +378,24 @@ Return ONLY the fully merged, comprehensive markdown representation.
             print(f"Merged and Updated {target_path}")
             
             extract_and_embed_claims(filename, merged_content.strip())
+            update_backlinks(filename, merged_content.strip())
             return target_path
     
     prompt = f"""
-You are preparing a new Wiki document. Here is the raw markdown content.
-Please review the text, and whenever you mention any of these known entities: {taxonomy_str}
-Wrap them in Wiki links like `[Entity_Name](pages/Entity_Name.md)`. 
-Leave everything else identical.
+You are creating a new Wikipedia-style entity document based on the provided raw data.
+Please rewrite and structure the raw information into a rich, comprehensive, and beautiful markdown page.
+Organize the facts clearly into logical sections such as '## Overview' and '## Key Details' (or specific topics like 'Financials', 'Technology', etc. based on the data).
+Synthesize the facts into cohesive paragraphs or bullet points, rather than a raw dump of key-value pairs.
 
-=== Content ===
+Ensure the output includes a `# Title`, the `**Type**`, and retains the `**Source**` link from the original data.
+
+Additionally, whenever you mention any of these known entities: {taxonomy_str}
+Wrap them in Wiki links like `[Entity_Name](pages/Entity_Name.md)`.
+
+=== Raw Data Content ===
 {new_content}
 
-Return ONLY the markdown code.
+Return ONLY the beautifully formatted markdown code.
 """
     response = query_llm([{"role": "user", "content": prompt}], system_prompt="You are an expert technical editor. Output markdown only.")
     final_content = new_content
@@ -348,6 +411,7 @@ Return ONLY the markdown code.
     print(f"Created {target_path}")
     
     extract_and_embed_claims(filename, final_content)
+    update_backlinks(filename, final_content)
     return target_path
 
 def extract_text_from_file(file_path):
@@ -402,6 +466,7 @@ I have a pandas DataFrame containing a knowledge base dataset. Here are the firs
 I want to iteratively extract all important entities/concepts into markdown files based on that schema.
 Write a raw Python function named `extract_entities(df)` that iterates through the DataFrame `df` and returns a list of dictionaries.
 Each dictionary MUST have two keys: 'filename' (e.g. 'Company_Name.md') and 'content' (the markdown string).
+CRITICAL RULE: Filenames MUST represent globally unique Root Entities (e.g., 'Apple_Inc.md'). NEVER use generic sub-topic names like 'Financials.md'. If a row is just a sub-topic of a parent entity, use the parent entity's filename and map the data into its content.
 Format the markdown 'content' beautifully. Include at least: '# Title', '**Type**: Entity', '**Source**: {file_path}', and map the core data from the row into paragraphs or lists.
 OUTPUT ONLY THE PIPELINE FUNCTION CODE. No explanatory text. No markdown formatting.
 """
@@ -438,6 +503,75 @@ OUTPUT ONLY THE PIPELINE FUNCTION CODE. No explanatory text. No markdown formatt
             print(f"Failed to execute LLM-written extraction code for sheet '{sheet_name}':\n{e}\n\nGenerated Code:\n{code}")
     log_action("ingest_hybrid_xlsx", os.path.basename(file_path))
 
+def handle_json_ingest(file_path):
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"Failed to load JSON file '{file_path}': {e}")
+        return
+
+    print(f"Analyzing schema for JSON file '{file_path}' using {MODEL_NAME}...")
+    
+    # Sample the JSON structure to avoid context limits
+    def sample_data(d, max_items=10):
+        if isinstance(d, list):
+            return [sample_data(item, max_items=2) for item in d[:max_items]]
+        elif isinstance(d, dict):
+            return {k: sample_data(v, max_items=2) for k, v in list(d.items())[:max_items]}
+        return d
+
+    sampled_json = json.dumps(sample_data(data, max_items=10), indent=2)
+    
+    prompt = f"""
+I have loaded a JSON dataset. Here is a sample of its structure:
+```json
+{sampled_json}
+```
+
+I want to creatively extract important entities/concepts into markdown files based on this structure.
+Write a raw Python function named `extract_entities(data)` that takes the full parsed JSON object `data` and returns a list of dictionaries.
+Each dictionary MUST have two keys: 'filename' (e.g. 'Company_Name.md') and 'content' (the markdown string).
+CRITICAL RULE: Filenames MUST represent globally unique Root Entities (e.g., 'Apple_Inc.md'). NEVER use generic sub-topic names like 'Financials.md'. If an item is just a sub-topic of a parent entity, use the parent entity's filename and map the data into its content.
+Format the markdown 'content' beautifully. Include at least: '# Title', '**Type**: Entity', '**Source**: {file_path}', and map the core facts from the JSON into paragraphs or lists.
+OUTPUT ONLY THE PIPELINE FUNCTION CODE. No explanatory text. No markdown formatting.
+"""
+    response = query_llm([{"role": "user", "content": prompt}], system_prompt="You are an expert Python software engineer. Output raw python code only, starting with `def extract_entities(data):`")
+    if not response: return
+        
+    code = response.strip()
+    if code.startswith("```python"): code = code[9:]
+    elif code.startswith("```"): code = code[3:]
+    if code.endswith("```"): code = code[:-3]
+        
+    print(f"[LLM parsed pattern] Executing generated mapping script over JSON dataset locally...")
+    namespace = {'json': json, 're': re}
+    try:
+        exec(code.strip(), namespace)
+        if 'extract_entities' not in namespace: 
+            print("Failed: Model did not generate 'extract_entities' function.")
+            return
+
+        extracted_data = namespace['extract_entities'](data)
+        
+        new_files = []
+        for item in extracted_data:
+            filename = item.get("filename", "")
+            if not filename: continue
+            raw_name = filename.replace(".md", "").replace("_", " ")
+            resolved_name = resolve_entity(raw_name)
+            final_filename = resolved_name.replace(" ", "_").replace("/", "").replace("\\", "") + ".md"
+            content = item.get("content", "")
+            
+            target_path = merge_and_save_entity(final_filename, content)
+            new_files.append((final_filename, content, target_path))
+
+        if new_files: update_index(new_files)
+
+    except Exception as e:
+        print(f"Failed to execute LLM-written extraction code for JSON:\\n{e}\\n\\nGenerated Code:\\n{code}")
+    log_action("ingest_hybrid_json", os.path.basename(file_path))
+
 def ingest(file_path):
     if not os.path.exists(file_path):
         print(f"Error: File '{file_path}' does not exist.")
@@ -446,6 +580,9 @@ def ingest(file_path):
     _, ext = os.path.splitext(file_path.lower())
     if ext == ".xlsx":
         handle_excel_ingest(file_path)
+        return
+    elif ext == ".json":
+        handle_json_ingest(file_path)
         return
 
     print(f"Extracting text from {file_path}...")
@@ -458,6 +595,8 @@ def ingest(file_path):
     prompt = f"""
 I have extracted text from a document. I want to identify the key entities (e.g., companies, people, technologies) and concepts.
 For each important entity or concept, provide a summary formatted as a Markdown file.
+
+CRITICAL RULE: All filenames MUST represent globally unique Root Entities (e.g., 'Apple_Inc.md', 'Tim_Cook.md'). NEVER use generic sub-topic names like 'Financials.md' or 'Q2_Earnings.md'. If the extracted data is a sub-topic of a parent entity, you MUST use the parent entity's filename (e.g., 'Apple_Inc.md') and structure the sub-topic data into its content block.
 
 Your output must be strictly in JSON format, like this:
 {{
@@ -648,8 +787,57 @@ If there IS a contradiction, explain precisely why and recommend a remedy.
     finally:
         conn.close()
 
-def lint(deep=False):
-    if deep:
+def lint_fix_all():
+    print("Running Auto-Fix & Restructure on all pages...")
+    taxonomy = get_existing_entities()
+    taxonomy_str = ", ".join(taxonomy)
+    fixed_count = 0
+    if not os.path.exists(PAGES_DIR):
+        print("No pages to fix.")
+        return
+
+    for file in os.listdir(PAGES_DIR):
+        if file.endswith(".md"):
+            path = os.path.join(PAGES_DIR, file)
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            print(f"Revising {file}...")
+            prompt = f"""
+You are a Wikipedia editor. Please review the following markdown file.
+1. Fix any basic grammar or spelling mistakes.
+2. Restructure the document into a rich, comprehensive, and beautiful Wikipedia-style page if it is not already. 
+   - Organize facts into logical sections like '## Overview' and '## Key Details' (or specific topics based on the data).
+   - Convert simple key-value dumps into cohesive paragraphs or bullet points.
+3. Keep the `# Title`, `**Type**`, and the `**Source**` link intact.
+4. Whenever you mention any of these known entities: {taxonomy_str}
+   Wrap them in Wiki links like `[Entity_Name](pages/Entity_Name.md)`.
+
+=== Content ===
+{content}
+
+Return ONLY the beautifully formatted markdown code. No explanatory text.
+"""
+            response = query_llm([{"role": "user", "content": prompt}], system_prompt="You are an expert technical editor. Output markdown only.")
+            if response:
+                cleaned = response.strip()
+                if cleaned.startswith("```markdown"): cleaned = cleaned[11:]
+                if cleaned.startswith("```"): cleaned = cleaned[3:]
+                if cleaned.endswith("```"): cleaned = cleaned[:-3]
+                cleaned = cleaned.strip()
+                
+                if cleaned:
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(cleaned)
+                    fixed_count += 1
+                    
+    print(f"\\nAuto-fixed and upgraded {fixed_count} pages!")
+    log_action("lint_fix", f"Restructured and grammar-checked {fixed_count} pages.")
+
+def lint(deep=False, fix=False):
+    if fix:
+        lint_fix_all()
+    elif deep:
         lint_deep()
     else:
         lint_hygiene()
@@ -660,6 +848,7 @@ if __name__ == "__main__":
     parser.add_argument("args", nargs="*", help="Arguments for the command.")
     parser.add_argument("--openai", action="store_true", help="Use OpenAI API instead of local LiteLLM")
     parser.add_argument("--deep", action="store_true", help="RAG systemic contradiction audit (lint only)")
+    parser.add_argument("--fix", action="store_true", help="Automatically revise and restructure all wiki pages during linting")
     
     args = parser.parse_args()
     if args.openai: USE_OPENAI = True
@@ -676,4 +865,4 @@ if __name__ == "__main__":
             sys.exit(1)
         query(args.args[0])
     elif cmd == "lint":
-        lint(deep=args.deep)
+        lint(deep=args.deep, fix=args.fix)
