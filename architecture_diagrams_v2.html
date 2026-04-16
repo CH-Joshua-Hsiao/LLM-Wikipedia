@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>LLM Wiki Step-by-Step System Workflows</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #ffffff;
+            color: #000000;
+            margin: 40px;
+        }
+        h1, h2 {
+            color: #111111;
+        }
+        .diagram-container {
+            margin-bottom: 60px;
+            page-break-inside: avoid;
+        }
+        /* Ensure mermaid html labels look nice */
+        .nodeLabel {
+            line-height: 1.4;
+            padding: 5px;
+        }
+        .nodeLabel i {
+            color: #333333;
+            font-size: 0.9em;
+        }
+    </style>
+    <!-- Include Mermaid.js -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script>
+        // High contrast initialization
+        mermaid.initialize({ 
+            startOnLoad: true, 
+            theme: 'default',
+            flowchart: {
+                htmlLabels: true
+            },
+            themeVariables: {
+                textColor: '#000000',
+                primaryTextColor: '#000000',
+                lineColor: '#000000',
+                nodeTextColor: '#000000'
+            }
+        });
+    </script>
+</head>
+<body>
+
+    <h1>System Workflows: Core Commands</h1>
+
+    <div class="diagram-container">
+        <h2>1. The Ingest Workflow</h2>
+        <p>The systematic pipeline logic for converting raw files into mapped Markdown entities while protecting against junk outputs and duplication.</p>
+        <div class="mermaid">
+flowchart TD
+    classDef llm fill:#f9d0c4,stroke:#000,stroke-width:2px,color:#000;
+    classDef offline fill:#d4ede4,stroke:#000,stroke-width:2px,color:#000;
+    classDef db fill:#c4ddf9,stroke:#000,stroke-width:2px,color:#000;
+    classDef flag fill:#fef3c7,stroke:#000,stroke-width:2px,color:#000;
+
+    Start["<b>Execute Command</b><br/><i>python wiki_agent.py ingest</i>"]:::flag --> A{"<b>File Type Check</b><br/><i>Excel, JSON, or Text?</i>"}:::offline
+    
+    A -->|"Excel / JSON"| B["<b>LLM Python Extraction</b><br/><i>Writes custom semantic parsing script</i>"]:::llm
+    A -->|"Text / PDF"| C["<b>LLM Markdown Extraction</b><br/><i>Extracts entities & concepts directly</i>"]:::llm
+    
+    B --> D["<b>Data Assembly</b><br/><i>Generate row/key dictionaries</i>"]:::offline
+    C --> D
+    
+    D --> E{"<b>LLM Editorial Filter</b><br/><i>'Is this a profound concept?'</i>"}:::llm
+    E -->|"No ('Page 2')"| F["<b>Skip & Drop</b><br/><i>Protect Database</i>"]:::offline
+    E -->|"Yes ('TSMC')"| G["<b>Vector Lookup</b><br/><i>Cosine Distance < 0.50</i>"]:::db
+    
+    G --> H{"<b>Candidates Found?</b>"}:::db
+    H -->|"Yes"| I{"<b>LLM Verification</b><br/><i>'Are these exact aliases?'</i>"}:::llm
+    I -->|"Yes"| J["<b>Map to Existing Alias</b>"]:::offline
+    H -->|"No"| K["<b>Create New Entity</b>"]:::offline
+    I -->|"No"| K
+    
+    J --> L["<b>Sanitize Filename</b><br/><i>Strip punctuation & dashes natively</i>"]:::offline
+    K --> L
+    
+    L --> M["<b>Merge Content Locally</b><br/><i>Writes cleanly to /pages</i>"]:::offline
+    M --> N["<b>Extract Description</b><br/><i>Scrapes ## Overview sentence</i>"]:::offline
+    N --> End["<b>Append to index.md</b>"]:::offline
+        </div>
+    </div>
+    
+    <div style="page-break-after: always;"></div>
+
+    <div class="diagram-container">
+        <h2>2. The Query Workflow (Recursive Multi-Hop RAG)</h2>
+        <p>The routing loop the agent uses to chase down complex answers across multiple wiki pages by querying its own graph.</p>
+        <div class="mermaid">
+flowchart TD
+    classDef llm fill:#f9d0c4,stroke:#000,stroke-width:2px,color:#000;
+    classDef offline fill:#d4ede4,stroke:#000,stroke-width:2px,color:#000;
+    classDef flag fill:#fef3c7,stroke:#000,stroke-width:2px,color:#000;
+
+    Start["<b>Execute Command</b><br/><i>python wiki_agent.py query</i>"]:::flag --> A["<b>Initialization</b><br/><i>Load index.md and context buffer</i>"]:::offline
+    
+    A --> B["<b>LLM Analysis Hop</b><br/><i>Pass gathered context into LLM</i>"]:::llm
+    B --> C{"<b>LLM Decision Gate</b><br/><i>Do you have enough information?</i>"}:::llm
+    
+    C -->|"Needs More Info"| D["<b>LLM Requests Targets</b><br/><i>Outputs JSON array ['Apple.md']</i>"]:::llm
+    D --> E["<b>Parse JSON Array</b><br/><i>Strip format wrappers natively</i>"]:::offline
+    E --> F["<b>Load Target Files</b><br/><i>Read Markdown file into memory</i>"]:::offline
+    F --> G{"<b>Hop Count < Max?</b>"}:::offline
+    
+    G -->|"Yes"| H["<b>Increment Hop</b>"]:::offline
+    H --> B
+    
+    G -->|"No Limit Reached"| I["<b>Force Synthesis</b><br/><i>Execute answer fallback sequence</i>"]:::offline
+    C -->|"Has Answer"| I
+    
+    I --> J["<b>Final Response</b><br/><i>LLM writes full markdown answer</i>"]:::llm
+    J --> End["<b>Print & Log Stats</b>"]:::offline
+        </div>
+    </div>
+
+    <div style="page-break-after: always;"></div>
+
+    <div class="diagram-container">
+        <h2>3. The Lint Workflow</h2>
+        <p>The system maintenance branching workflows to preserve the integrity, structure, and factual consistency of the wiki.</p>
+        <div class="mermaid">
+flowchart TD
+    classDef flag fill:#fef3c7,stroke:#000,stroke-width:2px,color:#000;
+    classDef llm fill:#f9d0c4,stroke:#000,stroke-width:2px,color:#000;
+    classDef db fill:#c4ddf9,stroke:#000,stroke-width:2px,color:#000;
+    classDef offline fill:#d4ede4,stroke:#000,stroke-width:2px,color:#000;
+
+    Start["<b>Execute Command</b><br/><i>python wiki_agent.py lint</i>"]:::flag --> A{"<b>Which Flags?</b>"}:::offline
+    
+    A -->|"No Flags (Default)"| B["<b>Sub-Graph Link Audit</b><br/><i>Target fast topological checks</i>"]:::offline
+    B --> C["<b>Extract Markdown Links</b><br/><i>Regex scan all files in /pages</i>"]:::offline
+    C --> D["<b>Graph O(1) Backlinks</b><br/><i>Append backward references physically</i>"]:::offline
+    
+    A -->|"--fix"| F["<b>Auto-Fix Restructure</b><br/><i>Convert legacy schema formatting</i>"]:::offline
+    F --> G["<b>Load Key-Value Files</b><br/><i>Locate outdated bullet-point pages</i>"]:::offline
+    G --> H["<b>LLM Content Rewrite</b><br/><i>Design beautiful Wikipedia layouts</i>"]:::llm
+    H --> I["<b>Overwrite File</b>"]:::offline
+    
+    A -->|"--deep"| J["<b>Systemic Contradiction</b><br/><i>Deep RAG fact checking protocol</i>"]:::offline
+    J --> K["<b>Atomic Fact Extraction</b><br/><i>LLM splits prose into isolated facts</i>"]:::llm
+    K --> L["<b>Store & Embed Vectors</b><br/><i>Save strict claims to wiki_claims DB</i>"]:::db
+    L --> M["<b>SQL Similarity Scan</b><br/><i>Locate logical overlap clusters safely</i>"]:::db
+    M --> N["<b>LLM Referee Review</b><br/><i>Are these vectors contradictory?</i>"]:::llm
+        </div>
+    </div>
+
+</body>
+</html>
