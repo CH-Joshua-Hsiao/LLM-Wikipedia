@@ -7,15 +7,8 @@ This file is the content-oriented catalog of everything in the wiki.
 - [Nvidia](pages/Nvidia.md) - Leading designer of AI hardware
 - [ASML](pages/ASML.md) - Monopoly on EUV lithography systems
 - [Micron](pages/Micron.md) - Leading memory manufacturer (HBM)
-
-## Concepts
-- [AI Supercycle](pages/AI_Supercycle.md) - Massive hardware demand driven by AI
-- [COUPE Silicon Photonics](pages/COUPE_Silicon_Photonics.md) - Platform for high-speed interconnects 
-- [High Bandwidth Memory (HBM)](pages/High_Bandwidth_Memory.md) - Critical 3D stacked memory interface for AI accelerators
-
-## Sources
-- [tsmc-news-april-2026.md](raw/tsmc-news-april-2026.md) - News wrap-up on TSMC (April 2026)
-- [semiconductor-industry-news-april-2026.md](raw/semiconductor-industry-news-april-2026.md) - Broad AI semiconductor industry news (April 2026)
+- [Lam Research Corporation](pages/Lam_Research_Corporation.md)
+- [Ram Ganesh](pages/Ram_Ganesh.md)
 - [Apple Inc](pages/Apple_Inc.md)
 - [Tim Cook](pages/Tim_Cook.md)
 - [Financial Highlights](pages/Financial_Highlights.md)
@@ -23,7 +16,88 @@ This file is the content-oriented catalog of everything in the wiki.
 - [Suhasini Chandramouli](pages/Suhasini_Chandramouli.md)
 - [Applied Materials Inc](pages/Applied_Materials_Inc.md)
 - [Gary Dickerson](pages/Gary_Dickerson.md)
-- [Taiwan Semiconductor Manufacturing Company Limited (TSM)](pages/Taiwan_Semiconductor_Manufacturing_Company_Limited_(TSM).md)
+- [Taiwan Semiconductor Manufacturing Company Limited (TSM)](pages/Taiwan_Semiconductor_Manufacturing_Company_Limited_TSM.md).md)
 - [Q3 2025 Financials TSM](pages/Q3_2025_Financials_TSM.md)
 - [Q4 2025 Guidance TSM](pages/Q4_2025_Guidance_TSM.md)
 - [Global Manufacturing AIDemand TSM](pages/Global_Manufacturing_AIDemand_TSM.md)
+
+- [Marvell Technology, Inc](pages/Marvell_Technology_Inc.md)
+- [JPMorgan Chase & Co](pages/JPMorgan_Chase_Co.md)
+- [Matthew Murphy](pages/Matthew_Murphy.md)
+- [Harlan Sur](pages/Harlan_Sur.md)
+- [Innovium](pages/Innovium.md)
+- [Inphi](pages/Inphi.md)
+- [JP Morgan](pages/JP_Morgan.md)
+- [Timothy Archer](pages/Timothy_Archer.md) - **Role**: President, CEO & Director at Lam Research Corporation.
+- [Douglas Bettinger](pages/Douglas_Bettinger.md) - **Role**: Executive VP & CFO at Lam Research Corporation.
+- [Timothy Arcuri](pages/Timothy_Arcuri.md) - **Organization**: UBS Investment Bank, Research Division.
+- [Vivek Arya](pages/Vivek_Arya.md) - **Organization**: BofA Securities, Research Division.
+- [James Schneider](pages/James_Schneider.md) - **Organization**: Goldman Sachs Group, Inc., Research Division.
+- [Sreekrishnan Sankarnarayanan](pages/Sreekrishnan_Sankarnarayanan.md) - **Organization**: TD Cowen, Research Division.
+- [Stacy Rasgon](pages/Stacy_Rasgon.md) - **Organization**: Sanford C.
+- [Blayne Curtis](pages/Blayne_Curtis.md) - **Organization**: Jefferies LLC, Research Division.
+- [Melissa Weathers](pages/Melissa_Weathers.md) - **Organization**: Deutsche Bank AG, Research Division.
+- [Mehdi Hosseini](pages/Mehdi_Hosseini.md) - **Organization**: Susquehanna Financial Group, LLLP, Research Division.
+- [Brian Chin](pages/Brian_Chin.md) - **Organization**: Stifel, Nicolaus & Company, Incorporated, Research Division.
+- [Morgan Stanley](pages/Morgan_Stanley.md) - Morgan Stanley is mentioned in the Q4 2025 Earnings Call Transcript.
+- [Melius Research LLC](pages/Melius_Research_LLC.md) - Melius Research LLC is mentioned in the Q4 2025 Earnings Call Transcript.
+- [Goldman Sachs Group Inc](pages/Goldman_Sachs_Group_Inc.md) - Goldman Sachs Group, Inc.
+- [Evercore ISI Institutional Equities](pages/Evercore_ISI_Institutional_Equities.md) - Evercore ISI Institutional Equities is mentioned in the Q4 2025 Earnings Call Transcript.
+- [BofA Securities](pages/BofA_Securities.md) - BofA Securities is mentioned in the Q4 2025 Earnings Call Transcript.
+- [JPMorgan Chase Co](pages/JPMorgan_Chase_Co.md) - JPMorgan Chase & Co is mentioned in the Q4 2025 Earnings Call Transcript.
+- [UBS Investment Bank](pages/UBS_Investment_Bank.md) - UBS Investment Bank is mentioned in the Q4 2025 Earnings Call Transcript.
+- [TD Cowen](pages/TD_Cowen.md) - TD Cowen is mentioned in the Q4 2025 Earnings Call Transcript.
+- [Wells Fargo Securities LLC](pages/Wells_Fargo_Securities_LLC.md) - Wells Fargo Securities, LLC is mentioned in the Q4 2025 Earnings Call Transcript.
+- [Citigroup Inc](pages/Citigroup_Inc.md) - Citigroup Inc.
+- [Arete Research Services LLP](pages/Arete_Research_Services_LLP.md) - Arete Research Services LLP is mentioned in the Q4 2025 Earnings Call Transcript.
+- [Formula 1](pages/Formula_1.md) - Formula 1 is mentioned in the Q4 2025 Earnings Call Transcript.
+- [Severance](pages/Severance.md) - Severance is mentioned in the Q4 2025 Earnings Call Transcript.
+- [Timothy Cook](pages/Timothy_Cook.md) - Timothy Cook is mentioned as a participant in the earnings call.
+- [Kevan Parekh](pages/Kevan_Parekh.md) - Kevan Parekh is mentioned as a participant in the earnings call.
+- [Benjamin Reitzes](pages/Benjamin_Reitzes.md) - Benjamin Reitzes is mentioned as a participant in the earnings call.
+- [Michael Ng](pages/Michael_Ng.md) - Michael Ng is mentioned as a participant in the earnings call.
+- [Amit Daryanani](pages/Amit_Daryanani.md) - Amit Daryanani is mentioned as a participant in the earnings call.
+- [Wamsi Mohan](pages/Wamsi_Mohan.md) - Wamsi Mohan is mentioned as a participant in the earnings call.
+- [Samik Chatterjee](pages/Samik_Chatterjee.md) - Samik Chatterjee is mentioned as a participant in the earnings call.
+- [David Vogt](pages/David_Vogt.md) - David Vogt is mentioned as a participant in the earnings call.
+- [Aaron Rakers](pages/Aaron_Rakers.md) - Aaron Rakers is mentioned as a participant in the earnings call.
+- [Atif Malik](pages/Atif_Malik.md) - Atif Malik is mentioned as a participant in the earnings call.
+- [Richard Kramer](pages/Richard_Kramer.md) - Richard Kramer is mentioned as a participant in the earnings call.
+## Concepts
+- [Aether](pages/Aether.md)
+- [Phoenix](pages/Phoenix.md)
+- [Halo](pages/Halo.md)
+- [Kallisto](pages/Kallisto.md)
+- [AI Supercycle](pages/AI_Supercycle.md) - Massive hardware demand driven by AI
+- [COUPE Silicon Photonics](pages/COUPE_Silicon_Photonics.md) - Platform for high-speed interconnects
+- [High Bandwidth Memory (HBM)](pages/High_Bandwidth_Memory_HBM.md) - Critical 3D stacked memory interface for AI accelerators
+
+- [JP Morgan Fireside Chat](pages/JP_Morgan_Fireside_Chat.md)
+- [Custom AI Silicon](pages/Custom_AI_Silicon.md) - Marvell Technology is heavily investing in custom AI silicon technologies.
+- [Lam Technologies](pages/Lam_Technologies.md)
+- [AI-related demand](pages/AI_related_demand.md) - The concept of 'AI-related demand' is crucial in understanding the technological trends discussed during Lam Research Corporation's earnings call.
+- [Semiconductor Manufacturing](pages/Semiconductor_Manufacturing.md) - The concept of 'Semiconductor Manufacturing' is crucial in understanding the technological trends discussed during Lam Research Corporation's earnings call.
+- [3D NAND Memory Technology](pages/3D_NAND_Memory_Technology.md) - The concept of '3D NAND Memory Technology' is crucial in understanding the technological trends discussed during Lam Research Corporation's earnings call.
+- [Advanced Logic Devices](pages/Advanced_Logic_Devices.md) - The concept of 'Advanced Logic Devices' is crucial in understanding the technological trends discussed during Lam Research Corporation's earnings call.
+- [Semiconductor manufacturing complexity](pages/Semiconductor_manufacturing_complexity.md) - Semiconductor manufacturing complexity is highlighted in the earnings call as a significant trend or technological area impacting the semiconductor industry and Lam Research Corporation's strategic focus.
+- [Advanced packaging](pages/Advanced_packaging.md) - Advanced packaging is highlighted in the earnings call as a significant trend or technological area impacting the semiconductor industry and Lam Research Corporation's strategic focus.
+- [3D NAND Technology](pages/3D_NAND_Technology.md) - 3D NAND Technology is highlighted in the earnings call as a significant trend or technological area impacting the semiconductor industry and Lam Research Corporation's strategic focus.
+- [Gate all around transistors](pages/Gate_all_around_transistors.md) - Gate-all-around transistors is highlighted in the earnings call as a significant trend or technological area impacting the semiconductor industry and Lam Research Corporation's strategic focus.
+- [Panel level packaging](pages/Panel_level_packaging.md) - Panel-level packaging is highlighted in the earnings call as a significant trend or technological area impacting the semiconductor industry and Lam Research Corporation's strategic focus.
+- [Innovation in semiconductor processes](pages/Innovation_in_semiconductor_processes.md) - Innovation in semiconductor processes is highlighted in the earnings call as a significant trend or technological area impacting the semiconductor industry and Lam Research Corporation's strategic focus.
+- [AI](pages/AI.md) - The concept of AI is discussed in the Q4 2025 Earnings Call Transcript.
+- [Apple silicon](pages/Apple_silicon.md) - The concept of Apple silicon is discussed in the Q4 2025 Earnings Call Transcript.
+- [Tariffs](pages/Tariffs.md) - The concept of Tariffs is discussed in the Q4 2025 Earnings Call Transcript.
+- [AI Workflows](pages/AI_Workflows.md) - The concept of AI Workflows is discussed in the Q4 2025 Earnings Call Transcript.
+- [Revenue Growth](pages/Revenue_Growth.md) - The concept of Revenue Growth is discussed in the Q4 2025 Earnings Call Transcript.
+- [Customer Satisfaction](pages/Customer_Satisfaction.md) - The concept of Customer Satisfaction is discussed in the Q4 2025 Earnings Call Transcript.
+- [Installed Base](pages/Installed_Base.md) - The concept of Installed Base is discussed in the Q4 2025 Earnings Call Transcript.
+- [Supply Constraints](pages/Supply_Constraints.md) - The concept of Supply Constraints is discussed in the Q4 2025 Earnings Call Transcript.
+- [Gross Margin](pages/Gross_Margin.md) - The concept of Gross Margin is discussed in the Q4 2025 Earnings Call Transcript.
+- [Operating Expenses](pages/Operating_Expenses.md) - The concept of Operating Expenses is discussed in the Q4 2025 Earnings Call Transcript.
+- [CapEx](pages/CapEx.md) - The concept of CapEx is discussed in the Q4 2025 Earnings Call Transcript.
+- [iPhone 17](pages/iPhone_17.md) - The concept of iPhone 17 is discussed in the Q4 2025 Earnings Call Transcript.
+- [MacBook Pro](pages/MacBook_Pro.md) - The concept of MacBook Pro is discussed in the Q4 2025 Earnings Call Transcript.
+## Sources
+- [tsmc-news-april-2026.md](raw/tsmc-news-april-2026.md) - News wrap-up on TSMC (April 2026)
+- [semiconductor-industry-news-april-2026.md](raw/semiconductor-industry-news-april-2026.md) - Broad AI semiconductor industry news (April 2026)

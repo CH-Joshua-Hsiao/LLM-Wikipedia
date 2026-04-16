@@ -18,8 +18,8 @@ USAGE:
    -> Automatically parses files, resolves aliases via DB, and builds markdown blocks locally.
 
 2. Query the Knowledge Base:
-   python wiki_agent.py query "Are there geopolitical concerns with TSMC?" [--openai]
-   -> Generates an answer using the aggregated knowledge base.
+   python wiki_agent.py query "Are there geopolitical concerns with TSMC?" [--openai] [--max-hops <int>]
+   -> Utilizes an agentic multi-hop retrieval loop. The LLM reads the index to pick targeted files, looping recursively to gather context until it formulates an answer or hits the max hop sequence (default 3).
 
 3. Lint the Wiki:
    python wiki_agent.py lint [--openai]
@@ -210,22 +210,33 @@ def resolve_entity(raw_name):
             """, (vec_literal,))
             
             candidates = cur.fetchall()
-            close_candidates = [c[0] for c in candidates if c[1] < 0.25]
+            # Loosen mathematical threshold significantly to cast a wider net; rely on the LLM veto.
+            close_candidates = [c[0] for c in candidates if c[1] < 0.50]
             
             if close_candidates:
-                prompt = f"""
+                 prompt = f"""
 We extracted the entity name '{raw_name}'.
 Our database has similar existing entities: {close_candidates}.
-Is '{raw_name}' conceptually identical or an exact alias/translation to any of these existing entities? 
-If YES, respond ONLY with the exact matching name from the list.
+Is '{raw_name}' conceptually identical or an exact alias to any of these existing entities? 
+We want to actively consolidate overlapping topics! If it refers to the exact same technology, person, or phenomenon (e.g., "High-Bandwidth Memory" vs "High Bandwidth Memory (HBM)"), you MUST respond YES.
+If YES, respond ONLY with the exact matching name from the list. If you are unsure, respond NO.
+If it is a match but you want to just say YES, we will route it to the closest candidate.
 If NO (it is a distinct, separate entity), respond ONLY with the word NO.
 """
-                resp = query_llm([{"role": "user", "content": prompt}], system_prompt="You are an entity resolution agent. Output only the requested exact string.")
-                if resp:
-                    ans = resp.strip()
-                    if ans in close_candidates:
-                        print(f"[RAG] Resolved alias '{raw_name}' -> '{ans}'!")
-                        return ans
+                 resp = query_llm([{"role": "user", "content": prompt}], system_prompt="You are an entity resolution agent. Output only the requested exact string.")
+                 if resp:
+                     ans = resp.strip().strip("'").strip('"')
+                     if ans.upper() == "YES" and len(close_candidates) == 1:
+                         print(f"[RAG] Resolved alias (Auto-YES) '{raw_name}' -> '{close_candidates[0]}'!")
+                         return close_candidates[0]
+
+                     def normalize(s):
+                         return re.sub(r'[^\w]', '', s).lower()
+
+                     for c in close_candidates:
+                         if normalize(ans) == normalize(c) or normalize(raw_name) == normalize(c) or normalize(ans) == normalize(raw_name):
+                             print(f"[RAG] Resolved alias '{raw_name}' -> '{c}'!")
+                             return c
                         
             cur.execute("INSERT INTO wiki_entities (name, embedding) VALUES (%s, %s::vector) ON CONFLICT (name) DO NOTHING;", (raw_name, vec_literal))
             return raw_name
@@ -235,6 +246,31 @@ If NO (it is a distinct, separate entity), respond ONLY with the word NO.
         return raw_name
     finally:
         conn.close()
+
+def get_safe_filename(name):
+    name_no_dashes = name.replace("-", " ")
+    clean = re.sub(r'[^\w\s]', '', name_no_dashes).strip()
+    return re.sub(r'[\s]+', '_', clean) + ".md"
+
+def is_meaningless_entity(name):
+    """Uses LLM to verify if an extracted entity name is meaningful or junk."""
+    n = name.replace(".md", "").strip()
+    if len(n) < 2:
+        return True
+        
+    prompt = f"""
+We extracted the following string from a document as a potential wiki entity/concept: "{n}"
+
+Is this a meaningful, genuine noun (like a specific company, person, technology, or distinct profound informational concept/phenomenon such as "AI Supercycle") suitable for a robust Knowledge Base?
+Or is it a meaningless semantic abstraction, arbitrary string, pure metadata, generic label, or document artifact (e.g. "Author 44211", "Page 2", "Header", "Table 1", "Conference Call Participants", "Q3 Earnings Summary", pure numbers)?
+
+If it is clearly MEANINGLESS or mere metadata/junk/document artifact, respond EXACTLY with the word "MEANINGLESS".
+If it is a genuinely meaningful topic, respond EXACTLY with the word "MEANINGFUL".
+"""
+    resp = query_llm([{"role": "user", "content": prompt}], system_prompt="You are an editorial filter. Output only one word.")
+    if resp and "MEANINGLESS" in resp.upper():
+        return True
+    return False
 
 def extract_and_embed_claims(filename, content):
     """Asks LLM to pull claims from text, embeds them, and shoves them into PostgreSQL wiki_claims table."""
@@ -465,8 +501,9 @@ I have a pandas DataFrame containing a knowledge base dataset. Here are the firs
 
 I want to iteratively extract all important entities/concepts into markdown files based on that schema.
 Write a raw Python function named `extract_entities(df)` that iterates through the DataFrame `df` and returns a list of dictionaries.
-Each dictionary MUST have two keys: 'filename' (e.g. 'Company_Name.md') and 'content' (the markdown string).
+Each dictionary MUST have three keys: 'type' (either 'entity' or 'concept'), 'filename' (e.g. 'Company_Name.md'), and 'content' (the markdown string).
 CRITICAL RULE: Filenames MUST represent globally unique Root Entities (e.g., 'Apple_Inc.md'). NEVER use generic sub-topic names like 'Financials.md'. If a row is just a sub-topic of a parent entity, use the parent entity's filename and map the data into its content.
+DO NOT extract purely metadata, numeric IDs, arbitrary strings, or meaningless labels (e.g. 'Author_44211', 'Page_2', 'Header', 'Conference_Call_Participants', 'Q3_Earnings_Summary') as entities. 'Concepts' MUST be broad industry phenomena, profound topics, or notable events (e.g., 'AI Supercycle', 'Supply Chain Shortage'), NOT structural document sections. Only extract genuine nouns such as specific people, companies, named technologies, organizations, and profound Concepts.
 Format the markdown 'content' beautifully. Include at least: '# Title', '**Type**: Entity', '**Source**: {file_path}', and map the core data from the row into paragraphs or lists.
 OUTPUT ONLY THE PIPELINE FUNCTION CODE. No explanatory text. No markdown formatting.
 """
@@ -488,14 +525,17 @@ OUTPUT ONLY THE PIPELINE FUNCTION CODE. No explanatory text. No markdown formatt
             new_files = []
             for item in extracted_data:
                 filename = item.get("filename", "")
-                if not filename: continue
+                if not filename or is_meaningless_entity(filename): 
+                    print(f"Skipping meaningless entity: {filename}")
+                    continue
                 raw_name = filename.replace(".md", "").replace("_", " ")
                 resolved_name = resolve_entity(raw_name)
-                final_filename = resolved_name.replace(" ", "_").replace("/", "").replace("\\", "") + ".md"
+                final_filename = get_safe_filename(resolved_name)
                 content = item.get("content", "")
+                item_type = item.get("type", "entity").lower()
                 
                 target_path = merge_and_save_entity(final_filename, content)
-                new_files.append((final_filename, content, target_path))
+                new_files.append((final_filename, content, target_path, item_type))
 
             if new_files: update_index(new_files)
 
@@ -531,8 +571,9 @@ I have loaded a JSON dataset. Here is a sample of its structure:
 
 I want to creatively extract important entities/concepts into markdown files based on this structure.
 Write a raw Python function named `extract_entities(data)` that takes the full parsed JSON object `data` and returns a list of dictionaries.
-Each dictionary MUST have two keys: 'filename' (e.g. 'Company_Name.md') and 'content' (the markdown string).
+Each dictionary MUST have three keys: 'type' (either 'entity' or 'concept'), 'filename' (e.g. 'Company_Name.md'), and 'content' (the markdown string).
 CRITICAL RULE: Filenames MUST represent globally unique Root Entities (e.g., 'Apple_Inc.md'). NEVER use generic sub-topic names like 'Financials.md'. If an item is just a sub-topic of a parent entity, use the parent entity's filename and map the data into its content.
+DO NOT extract purely metadata, numeric IDs, arbitrary strings, or meaningless labels (e.g. 'Author_44211', 'Page_2', 'Header', 'Conference_Call_Participants', 'Q3_Earnings_Summary') as entities. 'Concepts' MUST be broad industry phenomena, profound topics, or notable events (e.g., 'AI Supercycle', 'Supply Chain Shortage'), NOT structural document sections. Only extract genuine nouns such as specific people, companies, named technologies, organizations, and profound Concepts.
 Format the markdown 'content' beautifully. Include at least: '# Title', '**Type**: Entity', '**Source**: {file_path}', and map the core facts from the JSON into paragraphs or lists.
 OUTPUT ONLY THE PIPELINE FUNCTION CODE. No explanatory text. No markdown formatting.
 """
@@ -557,14 +598,17 @@ OUTPUT ONLY THE PIPELINE FUNCTION CODE. No explanatory text. No markdown formatt
         new_files = []
         for item in extracted_data:
             filename = item.get("filename", "")
-            if not filename: continue
+            if not filename or is_meaningless_entity(filename): 
+                print(f"Skipping meaningless entity: {filename}")
+                continue
             raw_name = filename.replace(".md", "").replace("_", " ")
             resolved_name = resolve_entity(raw_name)
-            final_filename = resolved_name.replace(" ", "_").replace("/", "").replace("\\", "") + ".md"
+            final_filename = get_safe_filename(resolved_name)
             content = item.get("content", "")
+            item_type = item.get("type", "entity").lower()
             
             target_path = merge_and_save_entity(final_filename, content)
-            new_files.append((final_filename, content, target_path))
+            new_files.append((final_filename, content, target_path, item_type))
 
         if new_files: update_index(new_files)
 
@@ -597,6 +641,7 @@ I have extracted text from a document. I want to identify the key entities (e.g.
 For each important entity or concept, provide a summary formatted as a Markdown file.
 
 CRITICAL RULE: All filenames MUST represent globally unique Root Entities (e.g., 'Apple_Inc.md', 'Tim_Cook.md'). NEVER use generic sub-topic names like 'Financials.md' or 'Q2_Earnings.md'. If the extracted data is a sub-topic of a parent entity, you MUST use the parent entity's filename (e.g., 'Apple_Inc.md') and structure the sub-topic data into its content block.
+DO NOT extract purely metadata, numeric IDs, arbitrary strings, or meaningless labels (e.g. 'Author_44211', 'Page_2', 'Header', 'Conference_Call_Participants', 'Q3_Earnings_Summary') as entities. 'Concepts' MUST be broad industry phenomena, profound topics, or notable events (e.g., 'AI Supercycle', 'Supply Chain Shortage'), NOT structural document sections. Only extract genuine nouns such as specific people, companies, named technologies, organizations, and profound Concepts.
 
 Your output must be strictly in JSON format, like this:
 {{
@@ -604,6 +649,12 @@ Your output must be strictly in JSON format, like this:
     {{
       "filename": "Entity_Name.md",
       "content": "# Entity Name\\n\\n**Type**: Entity\\n**Sources**: [{file_path}]({file_path})\\n\\n## Overview\\nSome information..."
+    }}
+  ],
+  "concepts": [
+    {{
+      "filename": "Concept_Name.md",
+      "content": "# Concept Name\\n\\n**Type**: Concept\\n**Sources**: [{file_path}]({file_path})\\n\\n## Overview\\nSome information..."
     }}
   ]
 }}
@@ -623,17 +674,22 @@ Here is the raw text to process:
         print(f"Failed to parse LLM response as valid JSON: {e}")
         return
 
+    items_to_process = [("entity", e) for e in extracted_data.get("entities", [])] + \
+                       [("concept", c) for c in extracted_data.get("concepts", [])]
+
     new_files = []
-    for entity in extracted_data.get("entities", []) + extracted_data.get("concepts", []):
+    for item_type, entity in items_to_process:
         filename = entity.get("filename", "")
-        if not filename: continue
+        if not filename or is_meaningless_entity(filename): 
+            print(f"Skipping meaningless entity: {filename}")
+            continue
         raw_name = filename.replace(".md", "").replace("_", " ")
         resolved_name = resolve_entity(raw_name)
-        final_filename = resolved_name.replace(" ", "_").replace("/", "").replace("\\", "") + ".md"
+        final_filename = get_safe_filename(resolved_name)
         file_content = entity.get("content", "")
         
         target_path = merge_and_save_entity(final_filename, file_content)
-        new_files.append((final_filename, file_content, target_path))
+        new_files.append((final_filename, file_content, target_path, item_type))
 
     if new_files: update_index(new_files)
     log_action("ingest", os.path.basename(file_path))
@@ -641,40 +697,173 @@ Here is the raw text to process:
 def update_index(new_files):
     if not os.path.exists("index.md"):
         with open("index.md", "w", encoding="utf-8") as f:
-            f.write("# LLM Wiki Index\n\n## Entities\n\n## Concepts\n")
+            f.write("# LLM Wiki Index\n\n## Entities\n\n## Concepts\n\n## Sources\n")
             
     with open("index.md", "r", encoding="utf-8") as f:
-        index_content = f.read()
+        lines = f.readlines()
 
     modified = False
-    for filename, _, target_path in new_files:
-        name_display = filename.replace(".md", "").replace("_", " ")
-        entry = f"- [{name_display}]({PAGES_DIR}/{filename})"
-        if entry not in index_content:
-            index_content += f"{entry}\n"
+    
+    def insert_entry(entry, section_name, name_display):
+        nonlocal modified
+        for line in lines:
+            if f"[{name_display.lower()}]" in line.lower():
+                return
+        section_idx = -1
+        for i, line in enumerate(lines):
+            if line.strip().lower() == f"## {section_name.lower()}":
+                section_idx = i
+                break
+        if section_idx != -1:
+            insert_idx = section_idx + 1
+            while insert_idx < len(lines) and (lines[insert_idx].strip() == "" or lines[insert_idx].strip().startswith("-")):
+                insert_idx += 1
+            lines.insert(insert_idx, f"{entry}\n")
             modified = True
+        else:
+            lines.append(f"\n## {section_name.title()}\n")
+            lines.append(f"{entry}\n")
+            modified = True
+
+    for filename, file_content, _, item_type in new_files:
+        name_display = filename.replace(".md", "").replace("_", " ")
+        desc = ""
+        
+        # Robust override: Inspect the actual generated markdown
+        if type(file_content) is str:
+            # Grab the very first actual sentence in the document intelligently
+            lines_content = file_content.split('\n')
+            for line in lines_content:
+                line = line.strip()
+                # Skip frontmatter, headers, and metadata lines
+                if not line or line.startswith('#'): continue
+                if line.lower().startswith('**type') or line.lower().startswith('**source'): continue
+                
+                # If the line has some robust alphabetical content, it's our first paragraph!
+                if re.search(r'[a-zA-Z]{5,}', line):
+                    first_sentence = re.split(r'(?<=[.!?])\s+', line)[0]
+                    if first_sentence:
+                        desc = f" - {first_sentence}"
+                    break
+                    
+            if re.search(r'\*\*type\*\*\s*:\s*concept', file_content, re.IGNORECASE):
+                item_type = "concept"
+            elif re.search(r'\*\*type\*\*\s*:\s*entity', file_content, re.IGNORECASE):
+                item_type = "entity"
+
+        entry = f"- [{name_display}]({PAGES_DIR}/{filename}){desc}"
+
+        if item_type == "concept":
+            insert_entry(entry, "Concepts", name_display)
+        else:
+            insert_entry(entry, "Entities", name_display)
             
     if modified:
         with open("index.md", "w", encoding="utf-8") as f:
-            f.write(index_content)
-        print("Updated index.md with new entries.")
+            f.writelines(lines)
+        print("Updated index.md with new grouped entries.")
 
-def query(question):
-    print(f"Querying knowledge base: {question}")
-    context = ""
-    for file in os.listdir(PAGES_DIR):
-        if file.endswith(".md"):
-            path = os.path.join(PAGES_DIR, file)
-            with open(path, "r", encoding="utf-8") as f:
-                context += f"--- {file} ---\n{f.read()}\n\n"
+def query(question, max_hops=3):
+    print(f"Querying knowledge base (Max Hops: {max_hops}): {question}")
+    
+    if not os.path.exists("index.md"):
+        print("Knowledge base index not found. Please ingest documents first.")
+        return
+        
+    with open("index.md", "r", encoding="utf-8") as f:
+        index_content = f.read()
+
+    visited_files = set()
+    current_hop = 1
+    
+    while current_hop <= max_hops:
+        print(f"\n--- [Hop {current_hop}/{max_hops}] Analyzing index and gathered context ---")
+        
+        # Build context from visited files
+        context = ""
+        for vf in visited_files:
+            path = os.path.join(PAGES_DIR, vf)
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    context += f"--- {vf} ---\n{f.read()}\n\n"
+        
+        prompt = f"""
+You are a multi-hop information retrieval agent. The user is asking: "{question}".
+Your goal is to fully answer the question OR determine which wiki files you need to read next to find the missing information.
+
+Here is the index of available knowledge base articles:
+{index_content}
+
+Here is the content of files you have ALREADY read (if any):
+{context}
+
+If you have enough information in the ALREADY read files to fully answer the user's question, OR if there are no more relevant files in the index to check, provide your final answer in a standard markdown formatting. DO NOT output a JSON list.
+
+If you STILL NEED to read more files from the index to formulate a complete answer, STRICTLY output a JSON list containing the exact filenames you want to read next (e.g. ["TSMC.md", "Apple_Inc.md"]). DO NOT request files you have already read.
+
+Your response MUST be EITHER a valid JSON list of filenames OR a string representing your final answer. Do not mix them.
+"""     
+        response = query_llm([{"role": "user", "content": prompt}], system_prompt="You are a routing and analysis agent. Output either a JSON array of filenames, or the final text answer.")
+        
+        if not response:
+            print("Error: Received empty response from LLM.")
+            return
+
+        cleaned = response.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        elif cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+        
+        is_json_array = False
+        
+        if cleaned.startswith("[") and cleaned.endswith("]"):
+            try:
+                files_to_read = json.loads(cleaned)
+                if isinstance(files_to_read, list):
+                    is_json_array = True
+            except Exception:
+                pass
                 
-    prompt = f"Using the following knowledge base context, answer the user's question. If the answer is not in the context, say so.\nContext:\n{context}\n\nQuestion: {question}"
-    answer = query_llm([{"role": "user", "content": prompt}], system_prompt="You are a helpful analyst.")
-    if answer:
-        print("\n--- Answer ---\n")
-        print(answer)
+        if is_json_array:
+            new_files = [f for f in files_to_read if str(f).endswith(".md") and f not in visited_files]
+            if not new_files:
+                print(f"[Hop {current_hop}] LLM requested no new valid files. Force answering...")
+                current_hop = max_hops + 1
+                continue
+                
+            print(f"[Hop {current_hop}] LLM elected to read: {new_files}")
+            visited_files.update(new_files)
+            current_hop += 1
+            continue
+            
+        # If it's not a JSON list, we assume it's the final answer
+        print("\n--- Final Answer ---\n")
+        print(cleaned)
         print("\n--------------\n")
-        log_action("query", question)
+        log_action("query", f"Answered '{question}' in {current_hop} hops. Visited: {list(visited_files)}")
+        return
+
+    # If we hit max hops and loop finishes, do final synthesis
+    print(f"\n[!] Max hops reached. Formulating final answer with gathered context...")
+    context = ""
+    for vf in visited_files:
+        path = os.path.join(PAGES_DIR, vf)
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                context += f"--- {vf} ---\n{f.read()}\n\n"
+    
+    prompt = f"Using ONLY the following gathered context, answer the user's question. If you cannot answer it, say so.\nContext:\n{context}\n\nQuestion: {question}"
+    final_answer = query_llm([{"role": "user", "content": prompt}], system_prompt="You are a helpful analyst.")
+    
+    if final_answer:
+        print("\n--- Final Answer ---\n")
+        print(final_answer)
+        print("\n--------------\n")
+        log_action("query", f"Answered '{question}' (Hit max hops={max_hops}). Visited: {list(visited_files)}")
 
 def lint_hygiene():
     print("Running Daily Hygiene (Targeted Sub-Graph)...")
@@ -849,6 +1038,7 @@ if __name__ == "__main__":
     parser.add_argument("--openai", action="store_true", help="Use OpenAI API instead of local LiteLLM")
     parser.add_argument("--deep", action="store_true", help="RAG systemic contradiction audit (lint only)")
     parser.add_argument("--fix", action="store_true", help="Automatically revise and restructure all wiki pages during linting")
+    parser.add_argument("--max-hops", type=int, default=3, help="Maximum number of hops for multi-hop retrieval querying (default: 3)")
     
     args = parser.parse_args()
     if args.openai: USE_OPENAI = True
@@ -863,6 +1053,6 @@ if __name__ == "__main__":
         if not args.args:
             print("Usage: python wiki_agent.py query \"<question>\"")
             sys.exit(1)
-        query(args.args[0])
+        query(args.args[0], max_hops=args.max_hops)
     elif cmd == "lint":
         lint(deep=args.deep, fix=args.fix)
