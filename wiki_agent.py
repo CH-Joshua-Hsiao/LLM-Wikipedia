@@ -30,6 +30,13 @@ USAGE:
 
    python wiki_agent.py lint --fix [--openai]
    -> Auto-Fix & Restructure: Iterates through all wiki pages to correct grammar and automatically upgrade old key-value files into rich Wikipedia-style sections.
+
+   python wiki_agent.py lint --merge [--openai]
+   -> Automerge Duplicates: Sweeps the vector DB for highly similar concepts, forces LLM verification, and auto-merges their markdown files and reroutes all their links.
+
+4. Reset the Wiki:
+   python wiki_agent.py reset
+   -> Wipes the knowledge base to start fresh. Moves all pages to the archive, resets the index and logs, and cleanly drops the PostgreSQL tables.
 """
 
 import os
@@ -317,38 +324,52 @@ def update_backlinks(filename, content):
     conn = init_db()
     if not conn: return
     
-    link_pattern = re.compile(r'\[.*?\]\(pages/(.*?\.md)\)')
+    # Relax regex to match both (pages/File.md) and (File.md) safely
+    link_pattern = re.compile(r'\[.*?\]\((?:pages/)?(.*?\.md)\)')
     targets = set(link_pattern.findall(content))
     
     try:
         with conn.cursor() as cur:
+            # 1. Store old targets before deletion so we can refresh them (to remove stale links)
+            cur.execute("SELECT target_file FROM wiki_links WHERE source_file = %s;", (filename,))
+            old_targets = set(row[0] for row in cur.fetchall())
+            
+            # 2. Update Knowledge Graph database
             cur.execute("DELETE FROM wiki_links WHERE source_file = %s;", (filename,))
             if targets:
                 for t in targets:
                     cur.execute("INSERT INTO wiki_links (source_file, target_file) VALUES (%s, %s) ON CONFLICT DO NOTHING;", (filename, t))
                     
-                # Now fetch backlinks for each target and append locally
-                for t in targets:
-                    cur.execute("SELECT source_file FROM wiki_links WHERE target_file = %s;", (t,))
-                    backlink_sources = [row[0] for row in cur.fetchall()]
-                    
-                    target_path = os.path.join(PAGES_DIR, t)
-                    if os.path.exists(target_path):
-                        with open(target_path, "r", encoding="utf-8") as f:
-                            t_content = f.read()
-                            
-                        # Remove existing Backlinks section if it exists to rewrite it cleanly
-                        parts = t_content.split("## Backlinks")
-                        main_body = parts[0].strip()
+            # 3. Refresh Backlinks section in markdown for ALL affected pages
+            # This includes new targets, removed targets, AND the current ingested file itself.
+            files_to_refresh = targets.union(old_targets)
+            files_to_refresh.add(filename)
+            
+            for f_name in files_to_refresh:
+                cur.execute("SELECT source_file FROM wiki_links WHERE target_file = %s;", (f_name,))
+                backlink_sources = [row[0] for row in cur.fetchall()]
+                
+                target_path = os.path.join(PAGES_DIR, f_name)
+                if os.path.exists(target_path):
+                    with open(target_path, "r", encoding="utf-8") as f:
+                        file_content = f.read()
                         
-                        if backlink_sources:
-                            backlink_section = "\n\n## Backlinks\n"
-                            for s in sorted(backlink_sources):
-                                display = s.replace(".md", "").replace("_", " ")
-                                backlink_section += f"- [{display}]({s})\n"
-                                
-                            with open(target_path, "w", encoding="utf-8") as f:
-                                f.write(main_body + backlink_section)
+                    # Clean out the old section
+                    parts = file_content.split("## Backlinks")
+                    main_body = parts[0].strip()
+                    
+                    if backlink_sources:
+                        backlink_section = "\n\n## Backlinks\n"
+                        for s in sorted(backlink_sources):
+                            display = s.replace(".md", "").replace("_", " ")
+                            backlink_section += f"- [{display}]({s})\n"
+                            
+                        with open(target_path, "w", encoding="utf-8") as f:
+                            f.write(main_body + backlink_section)
+                    else:
+                        with open(target_path, "w", encoding="utf-8") as f:
+                            f.write(main_body + "\n")
+                            
     except Exception as e:
         print(f"Error updating backlinks for {filename}: {e}")
     finally:
@@ -389,7 +410,7 @@ def merge_and_save_entity(filename, new_content):
         prompt = f"""
 You are a Wikipedia editor. An entity document already exists, but new information has been ingested.
 Your task is to merge the New Data into the Existing Document intelligently.
-Keep all historical facts, seamlessly weave in the new facts (e.g. extending timelines or sections), and format beautifully in Markdown.
+Keep all historical facts, seamlessly weave in the new facts, and format beautifully in Markdown. CRITICAL INSTRUCTION: Enrich the technical descriptions! Always extract and preserve raw numbers, tables, and quantitative analysis to provide deep insights. De-emphasize the names of specific market researchers/analysts; focus instead on what concept they asked about and what the factual response was.
 
 Whenever you mention other known entities in the text, wrap them in Wiki links like `[Entity_Name](pages/Entity_Name.md)`.
 Here is the list of currently known entities in the database:
@@ -421,7 +442,7 @@ Return ONLY the fully merged, comprehensive markdown representation.
 You are creating a new Wikipedia-style entity document based on the provided raw data.
 Please rewrite and structure the raw information into a rich, comprehensive, and beautiful markdown page.
 Organize the facts clearly into logical sections such as '## Overview' and '## Key Details' (or specific topics like 'Financials', 'Technology', etc. based on the data).
-Synthesize the facts into cohesive paragraphs or bullet points, rather than a raw dump of key-value pairs.
+Synthesize the facts into cohesive paragraphs or bullet points. CRITICAL INSTRUCTION: Enrich the technical descriptions! Always extract and preserve raw numbers, tables, and quantitative analysis to provide deep insights. De-emphasize the names of specific market researchers/analysts; focus instead on what concept they asked about and what the factual response was.
 
 Ensure the output includes a `# Title`, the `**Type**`, and retains the `**Source**` link from the original data.
 
@@ -502,9 +523,10 @@ I have a pandas DataFrame containing a knowledge base dataset. Here are the firs
 I want to iteratively extract all important entities/concepts into markdown files based on that schema.
 Write a raw Python function named `extract_entities(df)` that iterates through the DataFrame `df` and returns a list of dictionaries.
 Each dictionary MUST have three keys: 'type' (either 'entity' or 'concept'), 'filename' (e.g. 'Company_Name.md'), and 'content' (the markdown string).
-CRITICAL RULE: Filenames MUST represent globally unique Root Entities (e.g., 'Apple_Inc.md'). NEVER use generic sub-topic names like 'Financials.md'. If a row is just a sub-topic of a parent entity, use the parent entity's filename and map the data into its content.
+CRITICAL RULE: Filenames MUST represent globally unique Root Entities (e.g., 'Apple_Inc.md', 'iPhone.md'). Distinct and notable products, technologies, people, or platforms SHOULD get their own separate files. NEVER use generic sub-topic names like 'Financials.md' or 'Q2_Earnings.md'. If the extracted data is merely a generic sub-topic of a parent entity, you MUST map it to the parent entity's filename (e.g., 'Apple_Inc.md') and map the data into its content.
 DO NOT extract purely metadata, numeric IDs, arbitrary strings, or meaningless labels (e.g. 'Author_44211', 'Page_2', 'Header', 'Conference_Call_Participants', 'Q3_Earnings_Summary') as entities. 'Concepts' MUST be broad industry phenomena, profound topics, or notable events (e.g., 'AI Supercycle', 'Supply Chain Shortage'), NOT structural document sections. Only extract genuine nouns such as specific people, companies, named technologies, organizations, and profound Concepts.
-Format the markdown 'content' beautifully. Include at least: '# Title', '**Type**: Entity', '**Source**: {file_path}', and map the core data from the row into paragraphs or lists.
+CRITICAL RULE: Enrich technical descriptions! Extract and preserve numbers, tables, and quantitative analysis to provide deep insights. De-emphasize analyst/researcher names; focus entirely on the concepts asked and factual responses given.
+Format the markdown 'content' beautifully. Include at least: '# Title', '**Type**: Entity', '**Source**: {file_path}', and map the core data from the row into paragraphs, tables, or lists.
 OUTPUT ONLY THE PIPELINE FUNCTION CODE. No explanatory text. No markdown formatting.
 """
         response = query_llm([{"role": "user", "content": prompt}], system_prompt="You are an expert pandas software engineer. Output raw python code only, starting with `def extract_entities(df):`")
@@ -572,9 +594,10 @@ I have loaded a JSON dataset. Here is a sample of its structure:
 I want to creatively extract important entities/concepts into markdown files based on this structure.
 Write a raw Python function named `extract_entities(data)` that takes the full parsed JSON object `data` and returns a list of dictionaries.
 Each dictionary MUST have three keys: 'type' (either 'entity' or 'concept'), 'filename' (e.g. 'Company_Name.md'), and 'content' (the markdown string).
-CRITICAL RULE: Filenames MUST represent globally unique Root Entities (e.g., 'Apple_Inc.md'). NEVER use generic sub-topic names like 'Financials.md'. If an item is just a sub-topic of a parent entity, use the parent entity's filename and map the data into its content.
+CRITICAL RULE: Filenames MUST represent globally unique Root Entities (e.g., 'Apple_Inc.md', 'iPhone.md'). Distinct and notable products, technologies, people, or platforms SHOULD get their own separate files. NEVER use generic sub-topic names like 'Financials.md' or 'Q2_Earnings.md'. If the extracted data is merely a generic sub-topic of a parent entity, you MUST map it to the parent entity's filename (e.g., 'Apple_Inc.md') and map the data into its content.
 DO NOT extract purely metadata, numeric IDs, arbitrary strings, or meaningless labels (e.g. 'Author_44211', 'Page_2', 'Header', 'Conference_Call_Participants', 'Q3_Earnings_Summary') as entities. 'Concepts' MUST be broad industry phenomena, profound topics, or notable events (e.g., 'AI Supercycle', 'Supply Chain Shortage'), NOT structural document sections. Only extract genuine nouns such as specific people, companies, named technologies, organizations, and profound Concepts.
-Format the markdown 'content' beautifully. Include at least: '# Title', '**Type**: Entity', '**Source**: {file_path}', and map the core facts from the JSON into paragraphs or lists.
+CRITICAL RULE: Enrich technical descriptions! Extract and preserve numbers, tables, and quantitative analysis to provide deep insights. De-emphasize analyst/researcher names; focus entirely on the concepts asked and factual responses given.
+Format the markdown 'content' beautifully. Include at least: '# Title', '**Type**: Entity', '**Source**: {file_path}', and map the core facts from the JSON into paragraphs, tables, or lists.
 OUTPUT ONLY THE PIPELINE FUNCTION CODE. No explanatory text. No markdown formatting.
 """
     response = query_llm([{"role": "user", "content": prompt}], system_prompt="You are an expert Python software engineer. Output raw python code only, starting with `def extract_entities(data):`")
@@ -638,9 +661,10 @@ def ingest(file_path):
     print(f"Ingesting into semantic entities using {MODEL_NAME}...")
     prompt = f"""
 I have extracted text from a document. I want to identify the key entities (e.g., companies, people, technologies) and concepts.
-For each important entity or concept, provide a summary formatted as a Markdown file.
+For each important entity or concept, provide a summary formatted as a Markdown file. 
+CRITICAL RULE: Enrich the technical descriptions! Extract and explicitly include raw numbers, tables, and quantitative analysis formatting to provide deep insights. De-emphasize the names of market researchers/analysts; focus instead on what concept they asked about and what the factual response was.
 
-CRITICAL RULE: All filenames MUST represent globally unique Root Entities (e.g., 'Apple_Inc.md', 'Tim_Cook.md'). NEVER use generic sub-topic names like 'Financials.md' or 'Q2_Earnings.md'. If the extracted data is a sub-topic of a parent entity, you MUST use the parent entity's filename (e.g., 'Apple_Inc.md') and structure the sub-topic data into its content block.
+CRITICAL RULE: All filenames MUST represent globally unique Root Entities (e.g., 'Apple_Inc.md', 'iPhone.md', 'Tim_Cook.md'). Distinct and notable products, technologies, people, or platforms SHOULD get their own separate files. NEVER use generic sub-topic names like 'Financials.md' or 'Q2_Earnings.md'. If the extracted data is merely a generic sub-topic of a parent entity, you MUST map it to the parent entity's filename (e.g., 'Apple_Inc.md') and structure the data there.
 DO NOT extract purely metadata, numeric IDs, arbitrary strings, or meaningless labels (e.g. 'Author_44211', 'Page_2', 'Header', 'Conference_Call_Participants', 'Q3_Earnings_Summary') as entities. 'Concepts' MUST be broad industry phenomena, profound topics, or notable events (e.g., 'AI Supercycle', 'Supply Chain Shortage'), NOT structural document sections. Only extract genuine nouns such as specific people, companies, named technologies, organizations, and profound Concepts.
 
 Your output must be strictly in JSON format, like this:
@@ -1023,21 +1047,182 @@ Return ONLY the beautifully formatted markdown code. No explanatory text.
     print(f"\\nAuto-fixed and upgraded {fixed_count} pages!")
     log_action("lint_fix", f"Restructured and grammar-checked {fixed_count} pages.")
 
-def lint(deep=False, fix=False):
+def lint_merge_all():
+    print("Running Automerge Duplicates Scan...")
+    conn = init_db()
+    if not conn:
+        print("Cannot run merge linting without PostgreSQL connection.")
+        return
+        
+    try:
+        register_vector(conn)
+        with conn.cursor() as cur:
+            # 1. Self-healing DB check: Ensure all files currently in PAGES_DIR are actually in the DB
+            # This fixes issues where someone manually creates an .md file or postgres was down during ingest
+            if os.path.exists(PAGES_DIR):
+                for file in os.listdir(PAGES_DIR):
+                    if file.endswith(".md"):
+                        raw_name = file.replace(".md", "").replace("_", " ")
+                        cur.execute("SELECT id FROM wiki_entities WHERE name = %s;", (raw_name,))
+                        if not cur.fetchone():
+                            print(f"[Self-Healing] Missing DB record for '{raw_name}'. Generating vector...")
+                            vec = embed_text(raw_name)
+                            if vec:
+                                vec_literal = "[" + ",".join(map(str, vec)) + "]"
+                                cur.execute("INSERT INTO wiki_entities (name, embedding) VALUES (%s, %s::vector) ON CONFLICT DO NOTHING;", (raw_name, vec_literal))
+            
+            # 2. Moderate to wide threshold math sweep (0.45 instead of 0.35 to catch "semantic drift" like semiconductor)
+            cur.execute("""
+                SELECT a.name, b.name, a.embedding <=> b.embedding AS distance 
+                FROM wiki_entities a 
+                JOIN wiki_entities b ON a.id < b.id
+                WHERE (a.embedding <=> b.embedding) < 0.45
+                ORDER BY distance ASC;
+            """)
+            suspicious_pairs = cur.fetchall()
+            
+        if not suspicious_pairs:
+            print("No suspiciously similar entity names found.")
+            return
+            
+        print(f"Found {len(suspicious_pairs)} mathematically similar entity pairs. Asking LLM to verify...")
+        
+        merged_count = 0
+        merged_entities = set()
+        
+        for pair in suspicious_pairs:
+            name_a, name_b, dist = pair
+            if name_a in merged_entities or name_b in merged_entities:
+                continue
+                
+            prompt = f"""
+We have two entities in our knowledge base: '{name_a}' and '{name_b}'.
+Are these fundamentally referring to the exact same core concept, technology, or entity? 
+You should consolidate aliases! For example, "AI Supercycle" and "AI Semiconductor Supercycle" are the SAME concept. "Christophe D Fouquet" and "Christophe Fouquet" are the SAME person.
+If they are heavily overlapping or conceptually identical at the core, answer YES.
+If they are completely distinct things (e.g. "Apple Inc" vs "iPhone", or a parent versus a child product), answer NO.
+Reply exclusively with YES or NO.
+"""
+            resp = query_llm([{"role": "user", "content": prompt}], system_prompt="You are a consolidation agent.")
+            ans = resp.strip().upper() if resp else ""
+            if "YES" in ans:
+                print(f"[Automerge] LLM determined '{name_b}' is duplicate of '{name_a}'. Merging...")
+                
+                file_a = get_safe_filename(name_a)
+                file_b = get_safe_filename(name_b)
+                path_a = os.path.join(PAGES_DIR, file_a)
+                path_b = os.path.join(PAGES_DIR, file_b)
+                
+                if not os.path.exists(path_b):
+                    continue
+                    
+                with open(path_b, "r", encoding="utf-8") as f:
+                    content_b = f.read()
+                    
+                # Weavetogether the two files via existing powerful LLM tool
+                merge_and_save_entity(file_a, content_b)
+                
+                # Redirect links
+                with conn.cursor() as cur:
+                    cur.execute("SELECT source_file FROM wiki_links WHERE target_file = %s;", (file_b,))
+                    sources = [row[0] for row in cur.fetchall()]
+                    
+                    for src in sources:
+                        src_path = os.path.join(PAGES_DIR, src)
+                        if os.path.exists(src_path):
+                            with open(src_path, "r", encoding="utf-8") as f:
+                                src_content = f.read()
+                            new_content = src_content.replace(f"(pages/{file_b})", f"(pages/{file_a})")
+                            new_content = new_content.replace(f"({file_b})", f"({file_a})")
+                            
+                            with open(src_path, "w", encoding="utf-8") as f:
+                                f.write(new_content)
+                            
+                            update_backlinks(src, new_content)
+                            
+                    # Clean DB ghost roots
+                    cur.execute("DELETE FROM wiki_entities WHERE name = %s;", (name_b,))
+                    cur.execute("DELETE FROM wiki_links WHERE source_file = %s OR target_file = %s;", (file_b, file_b))
+                    cur.execute("DELETE FROM wiki_claims WHERE source_file = %s;", (file_b,))
+                    
+                # Scour from Index
+                if os.path.exists("index.md"):
+                    with open("index.md", "r", encoding="utf-8") as f:
+                        idx_lines = f.readlines()
+                    with open("index.md", "w", encoding="utf-8") as f:
+                        for line in idx_lines:
+                            if f"({PAGES_DIR}/{file_b})" not in line:
+                                f.write(line)
+                                
+                # Archive B file locally
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                shutil.move(path_b, os.path.join(ARCHIVE_DIR, f"{file_b.replace('.md', '')}_merged_{timestamp}.md"))
+
+                merged_entities.add(name_a)
+                merged_entities.add(name_b)
+                merged_count += 1
+                
+        print(f"\\nAutomerge complete! Consolidated {merged_count} duplicate concepts.")
+        log_action("lint_merge", f"Merged {merged_count} entity pairs.")
+        
+    except Exception as e:
+        print(f"Merge Lint error: {e}")
+    finally:
+        conn.close()
+
+def lint(deep=False, fix=False, merge=False):
     if fix:
         lint_fix_all()
     elif deep:
         lint_deep()
+    elif merge:
+        lint_merge_all()
     else:
         lint_hygiene()
 
+def reset():
+    print("Resetting Knowledge Base...")
+    
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    moved_count = 0
+    if os.path.exists(PAGES_DIR):
+        for file in os.listdir(PAGES_DIR):
+            if file.endswith(".md"):
+                src = os.path.join(PAGES_DIR, file)
+                dst = os.path.join(ARCHIVE_DIR, f"{file.replace('.md', '')}_{timestamp}.md")
+                shutil.move(src, dst)
+                moved_count += 1
+    print(f"Moved {moved_count} pages to archive.")
+    
+    with open("index.md", "w", encoding="utf-8") as f:
+        f.write("# LLM Wiki Index\n\n## Entities\n\n## Concepts\n\n## Sources\n")
+    print("Cleared index.md.")
+    
+    with open("log.md", "w", encoding="utf-8") as f:
+        pass
+    log_action("reset", f"System reset initialized. Archived {moved_count} pages.")
+    
+    conn = init_db()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DROP TABLE IF EXISTS wiki_entities, wiki_links, wiki_claims;")
+            print("Cleaned PostgreSQL database tables.")
+        except Exception as e:
+            print(f"Error cleaning database tables: {e}")
+        finally:
+            conn.close()
+    else:
+        print("No PostgreSQL database connection available to drop tables.")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="wiki_agent.py: Local LLM Wiki Automation Agent")
-    parser.add_argument("command", choices=["ingest", "query", "lint"], help="Command to execute")
+    parser.add_argument("command", choices=["ingest", "query", "lint", "reset"], help="Command to execute")
     parser.add_argument("args", nargs="*", help="Arguments for the command.")
     parser.add_argument("--openai", action="store_true", help="Use OpenAI API instead of local LiteLLM")
     parser.add_argument("--deep", action="store_true", help="RAG systemic contradiction audit (lint only)")
     parser.add_argument("--fix", action="store_true", help="Automatically revise and restructure all wiki pages during linting")
+    parser.add_argument("--merge", action="store_true", help="Automerge mathematically and conceptually identical entities globally (lint only)")
     parser.add_argument("--max-hops", type=int, default=3, help="Maximum number of hops for multi-hop retrieval querying (default: 3)")
     
     args = parser.parse_args()
@@ -1055,4 +1240,6 @@ if __name__ == "__main__":
             sys.exit(1)
         query(args.args[0], max_hops=args.max_hops)
     elif cmd == "lint":
-        lint(deep=args.deep, fix=args.fix)
+        lint(deep=args.deep, fix=args.fix, merge=args.merge)
+    elif cmd == "reset":
+        reset()

@@ -1,52 +1,45 @@
 # Apple Inc.
 
-**Type**: Company
-
-**Sources**:
-- [raw/4780879_Apple_Inc_(AAPL)_Q2_2025_Earnings_Call_Transcript.json](raw/4780879_Apple_Inc_(AAPL)_Q2_2025_Earnings_Call_Transcript.json)
-- [raw/4835951_Apple_Inc_(AAPL)_Q4_2025_Earnings_Call_Transcript.json](raw/4835951_Apple_Inc_(AAPL)_Q4_2025_Earnings_Call_Transcript.json)
+**Type**: Entity  
+**Source**: [./raw/4780879_Apple_Inc_(AAPL)_Q2_2025_Earnings_Call_Transcript.json](./raw/4780879_Apple_Inc_(AAPL)_Q2_2025_Earnings_Call_Transcript.json)
 
 ## Overview
+[Apple Inc.](pages/Apple_Inc.md), traded under the ticker AAPL, is a pioneering force in the global technology landscape, consistently driving innovation and expanding its market presence both domestically and internationally. In the latest earnings conference call held on May 1, 2025, the company showcased its robust financial performance and strategic initiatives geared towards sustained growth.
 
-[Apple Inc.](pages/Apple_Inc.md) presented its earnings report for the second quarter of 2025 on May 1st, highlighting key aspects such as revenues from its extensive product line and its commitment to innovation and sustainability. Apple reported a total revenue of $95.4 billion, reflecting a 5% increase year-over-year. The company also released its Q4 2025 earnings, offering further insights into its continued growth and market strategies.
+## Financial Performance
+For the second quarter of 2025, [Apple Inc.](pages/Apple_Inc.md) reported impressive financial metrics, underscoring its strength in revenue generation and profitability enhancement:
 
-## Financial Overview
+- **Revenue**: $95.4 billion, reflecting a 5% increase year-over-year.
+- **Diluted Earnings Per Share (EPS)**: $1.65, an 8% growth compared to the prior year.
 
-### Q2 2025
-- **Total Revenue**: $95.4 billion, a 5% year-over-year increase.
-- **Diluted EPS**: $1.65, up 8% year-over-year.
-- **Gross Margin**: 47.1%
-- **Services Revenue**: Achieved an all-time high of $26.6 billion, marking a 12% increase compared to the previous year.
+These results were bolstered by high achievements in their service offerings, with record revenue reported in [Apple Services](pages/Apple_Services.md), up 12% year-over-year.
 
-### Q4 2025
-(Details from the Q4 2025 transcript to be expanded as data becomes available)
+## Strategic Investments
+### U.S. Expansion
+Apple has announced an ambitious $500 billion investment in the United States over the next four years, aimed at expanding its infrastructural and operational capabilities. Key elements of this initiative include opening a new advanced server manufacturing factory in Texas and sourcing over 19 billion chips from states including Arizona for advanced chip production. The investment will enhance Apple's footprint through the expansion of teams and facilities in strategic states such as:
 
-## Products and Revenue
+- Michigan
+- Texas
+- California
+- Arizona
+- Nevada
+- Iowa
+- Oregon
+- North Carolina
+- Washington
 
-- **iPhone**: Generated $46.8 billion in revenue.
-- **Mac**: Contributed $7.9 billion to total revenue.
-- **iPad**: Accounted for $6.4 billion in revenue.
-- **Wearables and Accessories**: Reached $7.5 billion in revenue.
+These efforts are designed to bolster manufacturing capabilities and foster innovation hubs, pivotal for Apple's strategic objectives.
 
-## Key Products Launched
+## Product Segment Highlights
+Reflecting Apple's comprehensive approach across different product segments, the following revenue figures for Q2 2025 illustrate the company's dynamic performance:
 
-- **iPhone 16e**
-- **M4-powered MacBook Air**
-- **iPad Air with M3**
+- **[iPhone](pages/iPhone.md) Revenue**: $46.8 billion, a 2% increase year-over-year.
+- **[Mac](pages/Mac.md) Revenue**: $7.9 billion, up by 7% year-over-year.
+- **[iPad](pages/iPad.md) Revenue**: $6.4 billion, a significant 15% year-over-year increase.
+- **[Apple Services](pages/Apple_Services.md) Revenue**: Achieved an all-time high of $26.6 billion, driven by strong performance across service categories.
 
-## Forward-Looking Statements
+## Conclusion
+Apple Inc.'s continued financial growth, record-breaking service revenues, and strategic investments in U.S. operations underscore its dedication to maintaining leadership in the technology sector while contributing to local and national economies. These strategies are indicative of sustained advancement and exceptional operational performance in the years to come.
 
-Apple anticipates continued revenue growth, recognizing potential challenges such as tariffs and broader economic uncertainties. The company plans to invest $500 billion in the United States over the next four years.
-
-## Sustainability Initiatives
-
-Apple continues to advance its sustainability efforts with the ambitious goal of achieving carbon neutrality by 2030.
-
-For more information on related topics, see:
-- [AI_Supercycle](pages/AI_Supercycle.md)
-- [ASML](pages/ASML.md)
-- [COUPE_Silicon_Photonics](pages/COUPE_Silicon_Photonics.md)
-- [High_Bandwidth_Memory](pages/High_Bandwidth_Memory.md)
-- [Micron](pages/Micron.md)
-- [Nvidia](pages/Nvidia.md)
-- [TSMC](pages/TSMC.md)
+## Backlinks
+- [AI Semiconductor Supercycle](AI_Semiconductor_Supercycle.md)
