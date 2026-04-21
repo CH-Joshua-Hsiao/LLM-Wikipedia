@@ -39,6 +39,22 @@ USAGE:
    -> Wipes the knowledge base to start fresh. Moves all pages to the archive, resets the index and logs, and cleanly drops the PostgreSQL tables.
 """
 
+def summarize_entity(content):
+    """Uses LLM to generate a dense, one-sentence summary for the index."""
+    prompt = f"""
+Analyze the following wiki page content and generate a dense, professional, and technical one-sentence summary (approx. 20-30 words).
+Focus on the most important financial metrics, technical specs, or core identity of the entity.
+Do NOT include the entity name in the summary itself (e.g., instead of "Apple is a...", start with "A leading technology company...").
+Only use information present in the text.
+
+Content:
+{content}
+
+Summary:
+"""
+    resp = query_llm([{"role": "user", "content": prompt}], system_prompt="You are a concise technical encyclopedist.")
+    return resp.strip() if resp else ""
+
 import os
 import sys
 import json
@@ -412,7 +428,10 @@ def merge_and_save_entity(filename, new_content, cascade=True):
         prompt = f"""
 You are a Wikipedia editor. An entity document already exists, but new information has been ingested.
 Your task is to merge the New Data into the Existing Document intelligently.
-Keep all historical facts, seamlessly weave in the new facts, and format beautifully in Markdown. CRITICAL INSTRUCTION: Enrich the technical descriptions! Always extract and preserve raw numbers, tables, and quantitative analysis to provide deep insights. De-emphasize the names of specific market researchers/analysts; focus instead on what concept they asked about and what the factual response was.
+Keep all historical facts, seamlessly weave in the new facts, and format beautifully in Markdown. 
+CRITICAL RULE: Be extremely exhaustive and dense! Extract every single important fact, metric, timeline, and nuanced detail from the text. Prioritize raw numbers, financial metrics, technical specifications, and quantitative data. 
+
+STRICT RULE: Do NOT invent, hallucinate, or add supplemental knowledge from your own training data. Only use facts explicitly present in the Existing Document and the New Data. Stay 100% faithful to the provided text.
 
 Whenever you mention other known entities in the text, wrap them in Wiki links like `[Entity_Name](pages/Entity_Name.md)`.
 Here is the list of currently known entities in the database:
@@ -441,7 +460,10 @@ Return ONLY the fully merged, comprehensive markdown representation.
 You are creating a new Wikipedia-style entity document based on the provided raw data.
 Please rewrite and structure the raw information into a rich, comprehensive, and beautiful markdown page.
 Organize the facts clearly into logical sections such as '## Overview' and '## Key Details' (or specific topics like 'Financials', 'Technology', etc. based on the data).
-Synthesize the facts into cohesive paragraphs or bullet points. CRITICAL INSTRUCTION: Enrich the technical descriptions! Always extract and preserve raw numbers, tables, and quantitative analysis to provide deep insights. De-emphasize the names of specific market researchers/analysts; focus instead on what concept they asked about and what the factual response was.
+Synthesize the facts into cohesive paragraphs or bullet points. 
+CRITICAL RULE: Be extremely exhaustive and dense! Extract every single important fact, metric, timeline, and nuanced detail from the text. Prioritize raw numbers, financial metrics, hardware specifications, and any quantitative analysis. 
+
+STRICT RULE: Do NOT invent, hallucinate, or add supplemental knowledge from your own training data. Provide a wiki summary strictly based on the provided Raw Data Content. Do not fill in missing background information yourself.
 
 Ensure the output includes a `# Title`, the `**Type**`, and retains the `**Source**` link from the original data.
 
@@ -542,7 +564,8 @@ Write a raw Python function named `extract_entities(df)` that iterates through t
 Each dictionary MUST have three keys: 'type' (either 'entity' or 'concept'), 'filename' (e.g. 'Company_Name.md'), and 'content' (the markdown string).
 CRITICAL RULE: Filenames MUST represent globally unique Root Entities (e.g., 'Apple_Inc.md', 'iPhone.md'). Distinct and notable products, technologies, people, or platforms SHOULD get their own separate files. NEVER use generic sub-topic names like 'Financials.md' or 'Q2_Earnings.md'. If the extracted data is merely a generic sub-topic of a parent entity, you MUST map it to the parent entity's filename (e.g., 'Apple_Inc.md') and map the data into its content.
 DO NOT extract purely metadata, numeric IDs, arbitrary strings, or meaningless labels (e.g. 'Author_44211', 'Page_2', 'Header', 'Conference_Call_Participants', 'Q3_Earnings_Summary') as entities. 'Concepts' MUST be broad industry phenomena, profound topics, or notable events (e.g., 'AI Supercycle', 'Supply Chain Shortage'), NOT structural document sections. Only extract genuine nouns such as specific people, companies, named technologies, organizations, and profound Concepts.
-CRITICAL RULE: Enrich technical descriptions! Extract and preserve numbers, tables, and quantitative analysis to provide deep insights. De-emphasize analyst/researcher names; focus entirely on the concepts asked and factual responses given.
+CRITICAL RULE: Be extremely exhaustive and dense! Extract every single important fact, metric, financial ratio, timeline, and nuanced detail from the dataset. Do not just summarize broadly; pull the exact numbers, technical specs, and analytical arguments to provide a highly comprehensive and deep encyclopedic entry.
+STRICT RULE: The generated Python code MUST NOT invent, hallucinate, or add supplemental knowledge. It must strictly map the data from the DataFrame rows using ONLY the provided text.
 Format the markdown 'content' beautifully. Include at least: '# Title', '**Type**: Entity', '**Source**: {file_path}', and map the core data from the row into paragraphs, tables, or lists.
 OUTPUT ONLY THE PIPELINE FUNCTION CODE. No explanatory text. No markdown formatting.
 """
@@ -608,12 +631,13 @@ I have loaded a JSON dataset. Here is a sample of its structure:
 {sampled_json}
 ```
 
-I want to creatively extract important entities/concepts into markdown files based on this structure.
+I want to extract all important entities/concepts into markdown files based on this structure.
 Write a raw Python function named `extract_entities(data)` that takes the full parsed JSON object `data` and returns a list of dictionaries.
 Each dictionary MUST have three keys: 'type' (either 'entity' or 'concept'), 'filename' (e.g. 'Company_Name.md'), and 'content' (the markdown string).
 CRITICAL RULE: Filenames MUST represent globally unique Root Entities (e.g., 'Apple_Inc.md', 'iPhone.md'). Distinct and notable products, technologies, people, or platforms SHOULD get their own separate files. NEVER use generic sub-topic names like 'Financials.md' or 'Q2_Earnings.md'. If the extracted data is merely a generic sub-topic of a parent entity, you MUST map it to the parent entity's filename (e.g., 'Apple_Inc.md') and map the data into its content.
 DO NOT extract purely metadata, numeric IDs, arbitrary strings, or meaningless labels (e.g. 'Author_44211', 'Page_2', 'Header', 'Conference_Call_Participants', 'Q3_Earnings_Summary') as entities. 'Concepts' MUST be broad industry phenomena, profound topics, or notable events (e.g., 'AI Supercycle', 'Supply Chain Shortage'), NOT structural document sections. Only extract genuine nouns such as specific people, companies, named technologies, organizations, and profound Concepts.
-CRITICAL RULE: Enrich technical descriptions! Extract and preserve numbers, tables, and quantitative analysis to provide deep insights. De-emphasize analyst/researcher names; focus entirely on the concepts asked and factual responses given.
+CRITICAL RULE: Be extremely exhaustive and dense! Extract every single important fact, metric, financial ratio, timeline, and nuanced detail from the dataset. Do not just summarize broadly; pull the exact numbers, technical specs, and analytical arguments to provide a highly comprehensive and deep encyclopedic entry.
+STRICT RULE: The generated Python code MUST NOT invent, hallucinate, or add supplemental knowledge. It must strictly map the data from the JSON dictionary using ONLY the provided text.
 Format the markdown 'content' beautifully. Include at least: '# Title', '**Type**: Entity', '**Source**: {file_path}', and map the core facts from the JSON into paragraphs, tables, or lists.
 OUTPUT ONLY THE PIPELINE FUNCTION CODE. No explanatory text. No markdown formatting.
 """
@@ -679,7 +703,9 @@ def ingest(file_path):
     prompt = f"""
 I have extracted text from a document. I want to identify the key entities (e.g., companies, people, technologies) and concepts.
 For each important entity or concept, provide a summary formatted as a Markdown file. 
-CRITICAL RULE: Enrich the technical descriptions! Extract and explicitly include raw numbers, tables, and quantitative analysis formatting to provide deep insights. De-emphasize the names of market researchers/analysts; focus instead on what concept they asked about and what the factual response was.
+CRITICAL RULE: Be extremely exhaustive and dense! Extract every single important fact, metric, financial ratio, timeline, and nuanced detail from the dataset. Prioritize raw numbers, detailed technical specifications, and hardware/financial quantitative analysis to provide deep insights.
+
+STRICT RULE: Do NOT hallucinate or supplement with outside knowledge. Generate the wiki content purely and strictly using ONLY the information found in the extracted text below. Stay 100% faithful to the source material.
 
 CRITICAL RULE: All filenames MUST represent globally unique Root Entities (e.g., 'Apple_Inc.md', 'iPhone.md', 'Tim_Cook.md'). Distinct and notable products, technologies, people, or platforms SHOULD get their own separate files. NEVER use generic sub-topic names like 'Financials.md' or 'Q2_Earnings.md'. If the extracted data is merely a generic sub-topic of a parent entity, you MUST map it to the parent entity's filename (e.g., 'Apple_Inc.md') and structure the data there.
 DO NOT extract purely metadata, numeric IDs, arbitrary strings, or meaningless labels (e.g. 'Author_44211', 'Page_2', 'Header', 'Conference_Call_Participants', 'Q3_Earnings_Summary') as entities. 'Concepts' MUST be broad industry phenomena, profound topics, or notable events (e.g., 'AI Supercycle', 'Supply Chain Shortage'), NOT structural document sections. Only extract genuine nouns such as specific people, companies, named technologies, organizations, and profound Concepts.
@@ -774,28 +800,13 @@ def update_index(new_files):
         name_display = filename.replace(".md", "").replace("_", " ")
         desc = ""
         
-        # Robust override: Inspect the actual generated markdown
+        # Intelligent description generation
+        desc = ""
         if type(file_content) is str:
-            # Grab the very first actual sentence in the document intelligently
-            lines_content = file_content.split('\n')
-            for line in lines_content:
-                line = line.strip()
-                # Skip frontmatter, headers, and metadata lines
-                if not line or line.startswith('#'): continue
-                if line.lower().startswith('**type') or line.lower().startswith('**source'): continue
-                
-                # If the line has some robust alphabetical content, it's our first paragraph!
-                if re.search(r'[a-zA-Z]{5,}', line):
-                    # Clean out markdown list markers and bold metadata prefixes 
-                    clean_line = re.sub(r'^[-*+]\s+', '', line)
-                    clean_line = re.sub(r'^\*\*[^*]+\*\*\s*[:-]\s*', '', clean_line)
-                    
-                    # More robust sentence split that avoids splitting on initials like "D."
-                    first_sentence = re.split(r'(?<=[a-z]{2}[.!?])\s+(?=[A-Z])', clean_line.strip())[0]
-                    if first_sentence:
-                        desc = f" - {first_sentence}"
-                    break
-                    
+            summary = summarize_entity(file_content)
+            if summary:
+                desc = f" - {summary}"
+            
             if re.search(r'\*\*type\*\*\s*:\s*concept', file_content, re.IGNORECASE):
                 item_type = "concept"
             elif re.search(r'\*\*type\*\*\s*:\s*entity', file_content, re.IGNORECASE):
@@ -1066,8 +1077,11 @@ def lint_fix_all():
 You are a Wikipedia editor. Please review the following markdown file.
 1. Fix any basic grammar or spelling mistakes.
 2. Restructure the document into a rich, comprehensive, and beautiful Wikipedia-style page if it is not already. 
-   - Organize facts into logical sections like '## Overview' and '## Key Details' (or specific topics based on the data).
+   - Organize facts into logical sections like '## Overview' and '## Key Details' (or specific topics like 'Financials', 'Technology', etc. based on the data).
    - Convert simple key-value dumps into cohesive paragraphs or bullet points.
+CRITICAL RULE: Be extremely exhaustive and dense! Extract every single important fact, metric, financial ratio, timeline, and nuanced detail from the text. Prioritize raw numbers, technical specifications, and quantitative data. 
+
+STRICT RULE: Do NOT invent, hallucinate, or add supplemental knowledge from your own training data. Only use facts explicitly present in the Existing Document. Stay 100% faithful to the source material.
 3. Keep the `# Title`, `**Type**`, and the `**Source**` link intact.
 4. Whenever you mention any of these known entities: {taxonomy_str}
    Wrap them in Wiki links like `[Entity_Name](pages/Entity_Name.md)`.
@@ -1226,6 +1240,38 @@ def lint(deep=False, fix=False, merge=False):
     else:
         lint_hygiene()
 
+def rebuild_all_indices():
+    """Wipes index.md and rebuilds it by reading every file in PAGES_DIR."""
+    print("Rebuilding entire index with intelligent summaries...")
+    if not os.path.exists(PAGES_DIR):
+        print("No pages found to index.")
+        return
+
+    # Reset index.md
+    with open("index.md", "w", encoding="utf-8") as f:
+        f.write("# LLM Wiki Index\n\n## Entities\n\n## Concepts\n\n## Sources\n")
+
+    files = [f for f in os.listdir(PAGES_DIR) if f.endswith(".md")]
+    new_files_data = []
+
+    for filename in sorted(files):
+        path = os.path.join(PAGES_DIR, filename)
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        
+        # Determine type
+        item_type = "entity"
+        if re.search(r'\*\*type\*\*\s*:\s*concept', content, re.IGNORECASE):
+            item_type = "concept"
+            
+        print(f"Summarizing {filename}...")
+        new_files_data.append((filename, content, path, item_type))
+
+    if new_files_data:
+        update_index(new_files_data)
+        print(f"Rebuilt index with {len(new_files_data)} entries.")
+        log_action("refresh_index", f"Manually rebuilt index for {len(new_files_data)} files.")
+
 def reset():
     print("Resetting Knowledge Base...")
     
@@ -1263,7 +1309,7 @@ def reset():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="wiki_agent.py: Local LLM Wiki Automation Agent")
-    parser.add_argument("command", choices=["ingest", "query", "lint", "reset"], help="Command to execute")
+    parser.add_argument("command", choices=["ingest", "query", "lint", "reset", "refresh-index"], help="Command to execute")
     parser.add_argument("args", nargs="*", help="Arguments for the command.")
     parser.add_argument("--openai", action="store_true", help="Use OpenAI API instead of local LiteLLM")
     parser.add_argument("--deep", action="store_true", help="RAG systemic contradiction audit (lint only)")
@@ -1289,3 +1335,5 @@ if __name__ == "__main__":
         lint(deep=args.deep, fix=args.fix, merge=args.merge)
     elif cmd == "reset":
         reset()
+    elif cmd == "refresh-index":
+        rebuild_all_indices()
