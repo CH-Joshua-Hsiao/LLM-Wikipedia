@@ -390,10 +390,12 @@ def get_existing_entities():
                 entities.append(file.replace(".md", ""))
     return entities
 
-def merge_and_save_entity(filename, new_content):
+def merge_and_save_entity(filename, new_content, cascade=True):
     target_path = os.path.join(PAGES_DIR, filename)
     taxonomy = get_existing_entities()
     taxonomy_str = ", ".join(taxonomy)
+
+    final_content_to_save = None
 
     if os.path.exists(target_path):
         # Archive old version
@@ -430,15 +432,12 @@ Return ONLY the fully merged, comprehensive markdown representation.
             if merged_content.startswith("```markdown"): merged_content = merged_content[11:]
             if merged_content.startswith("```"): merged_content = merged_content[3:]
             if merged_content.endswith("```"): merged_content = merged_content[:-3]
+            final_content_to_save = merged_content.strip()
             with open(target_path, "w", encoding="utf-8") as f:
-                f.write(merged_content.strip())
+                f.write(final_content_to_save)
             print(f"Merged and Updated {target_path}")
-            
-            extract_and_embed_claims(filename, merged_content.strip())
-            update_backlinks(filename, merged_content.strip())
-            return target_path
-    
-    prompt = f"""
+    else:
+        prompt = f"""
 You are creating a new Wikipedia-style entity document based on the provided raw data.
 Please rewrite and structure the raw information into a rich, comprehensive, and beautiful markdown page.
 Organize the facts clearly into logical sections such as '## Overview' and '## Key Details' (or specific topics like 'Financials', 'Technology', etc. based on the data).
@@ -454,21 +453,39 @@ Wrap them in Wiki links like `[Entity_Name](pages/Entity_Name.md)`.
 
 Return ONLY the beautifully formatted markdown code.
 """
-    response = query_llm([{"role": "user", "content": prompt}], system_prompt="You are an expert technical editor. Output markdown only.")
-    final_content = new_content
-    if response:
-         cleaned = response.strip()
-         if cleaned.startswith("```markdown"): cleaned = cleaned[11:]
-         if cleaned.startswith("```"): cleaned = cleaned[3:]
-         if cleaned.endswith("```"): cleaned = cleaned[:-3]
-         final_content = cleaned.strip()
+        response = query_llm([{"role": "user", "content": prompt}], system_prompt="You are an expert technical editor. Output markdown only.")
+        final_content = new_content
+        if response:
+             cleaned = response.strip()
+             if cleaned.startswith("```markdown"): cleaned = cleaned[11:]
+             if cleaned.startswith("```"): cleaned = cleaned[3:]
+             if cleaned.endswith("```"): cleaned = cleaned[:-3]
+             final_content = cleaned.strip()
 
-    with open(target_path, "w", encoding="utf-8") as f:
-        f.write(final_content)
-    print(f"Created {target_path}")
-    
-    extract_and_embed_claims(filename, final_content)
-    update_backlinks(filename, final_content)
+        final_content_to_save = final_content
+        with open(target_path, "w", encoding="utf-8") as f:
+            f.write(final_content_to_save)
+        print(f"Created {target_path}")
+        
+    if final_content_to_save:
+        extract_and_embed_claims(filename, final_content_to_save)
+        update_backlinks(filename, final_content_to_save)
+        
+        if cascade:
+            link_pattern = re.compile(r'\[.*?\]\((?:pages/)?(.*?\.md)\)')
+            targets = set(link_pattern.findall(final_content_to_save))
+            if targets:
+                sentences = final_content_to_save.replace('\n', ' ').split('. ')
+                for t in targets:
+                    if t == filename: continue
+                    target_path_check = os.path.join(PAGES_DIR, t)
+                    if os.path.exists(target_path_check):
+                        mention_sentences = [s for s in sentences if f"({t})" in s or f"(pages/{t})" in s]
+                        if mention_sentences:
+                            context_injection = ". ".join(mention_sentences) + "."
+                            print(f"[Cascade] Updating {t} with contextual link from {filename}...")
+                            merge_and_save_entity(t, f"New context referencing this topic from {filename}: {context_injection}", cascade=False)
+                            
     return target_path
 
 def extract_text_from_file(file_path):
@@ -730,9 +747,13 @@ def update_index(new_files):
     
     def insert_entry(entry, section_name, name_display):
         nonlocal modified
-        for line in lines:
+        for i, line in enumerate(lines):
             if f"[{name_display.lower()}]" in line.lower():
+                if lines[i].strip() != entry.strip():
+                    lines[i] = f"{entry}\n"
+                    modified = True
                 return
+                
         section_idx = -1
         for i, line in enumerate(lines):
             if line.strip().lower() == f"## {section_name.lower()}":
@@ -765,7 +786,12 @@ def update_index(new_files):
                 
                 # If the line has some robust alphabetical content, it's our first paragraph!
                 if re.search(r'[a-zA-Z]{5,}', line):
-                    first_sentence = re.split(r'(?<=[.!?])\s+', line)[0]
+                    # Clean out markdown list markers and bold metadata prefixes 
+                    clean_line = re.sub(r'^[-*+]\s+', '', line)
+                    clean_line = re.sub(r'^\*\*[^*]+\*\*\s*[:-]\s*', '', clean_line)
+                    
+                    # More robust sentence split that avoids splitting on initials like "D."
+                    first_sentence = re.split(r'(?<=[a-z]{2}[.!?])\s+(?=[A-Z])', clean_line.strip())[0]
                     if first_sentence:
                         desc = f" - {first_sentence}"
                     break
@@ -801,8 +827,6 @@ def query(question, max_hops=3):
     current_hop = 1
     
     while current_hop <= max_hops:
-        print(f"\n--- [Hop {current_hop}/{max_hops}] Analyzing index and gathered context ---")
-        
         # Build context from visited files
         context = ""
         for vf in visited_files:
@@ -810,66 +834,82 @@ def query(question, max_hops=3):
             if os.path.exists(path):
                 with open(path, "r", encoding="utf-8") as f:
                     context += f"--- {vf} ---\n{f.read()}\n\n"
+                    
+        print(f"\n--- [Hop {current_hop}/{max_hops}] Agent 1: Synthesizing Context ---")
+        prompt1 = f"""
+You are an analytical agent. The user is asking: "{question}".
+Here is the content of files you have ALREADY read (if any):
+{context}
+
+Can you fully and comprehensively answer the user's question using ONLY the provided context?
+If yes, provide your final answer in standard markdown formatting.
+If you are missing crucial facts, or if the context is entirely empty, you MUST output exactly the string: NEED_MORE_INFO
+"""
+        response1 = query_llm([{"role": "user", "content": prompt1}], system_prompt="You are an analytical agent.")
         
-        prompt = f"""
-You are a multi-hop information retrieval agent. The user is asking: "{question}".
-Your goal is to fully answer the question OR determine which wiki files you need to read next to find the missing information.
+        if not response1:
+            print("Error: Received empty response from LLM (Agent 1).")
+            return
+            
+        if "NEED_MORE_INFO" not in response1.strip():
+            ans = response1.strip()
+            if visited_files:
+                sources_str = ", ".join([f.replace(".md", "") for f in visited_files])
+                ans += f"\n\n---\n**Sources Consulted:** {sources_str}"
+            
+            print("\n--- Final Answer ---\n")
+            print(ans)
+            print("\n--------------\n")
+            log_action("query", f"Answered '{question}' in {current_hop} hops. Visited: {list(visited_files)}")
+            return ans
+            
+        print(f"[Hop {current_hop}] Context insufficient. Triggering Agent 2: Routing Index...")
+        prompt2 = f"""
+You are a relentless routing agent. The user is asking: "{question}".
+You need more information to answer the question.
 
 Here is the index of available knowledge base articles:
 {index_content}
 
-Here is the content of files you have ALREADY read (if any):
-{context}
+CRITICAL INSTRUCTION: Review the index and output a JSON list containing the exact filenames of any potentially relevant files you want to read next (e.g. ["TSMC.md", "Apple_Inc.md"]). DO NOT request files you have already read.
+Files you have already read: {list(visited_files)}
 
-If you have enough information in the ALREADY read files to fully answer the user's question, OR if there are no more relevant files in the index to check, provide your final answer in a standard markdown formatting. DO NOT output a JSON list.
-
-If you STILL NEED to read more files from the index to formulate a complete answer, STRICTLY output a JSON list containing the exact filenames you want to read next (e.g. ["TSMC.md", "Apple_Inc.md"]). DO NOT request files you have already read.
-
-Your response MUST be EITHER a valid JSON list of filenames OR a string representing your final answer. Do not mix them.
-"""     
-        response = query_llm([{"role": "user", "content": prompt}], system_prompt="You are a routing and analysis agent. Output either a JSON array of filenames, or the final text answer.")
+OUTPUT ONLY A VALID JSON LIST OF FILENAMES. Do not output any other text or explanation.
+"""
+        response2 = query_llm([{"role": "user", "content": prompt2}], system_prompt="You are a JSON routing agent. Output ONLY a valid JSON array of strings.")
         
-        if not response:
-            print("Error: Received empty response from LLM.")
+        if not response2:
+            print("Error: Received empty response from LLM (Agent 2).")
             return
-
-        cleaned = response.strip()
-        if cleaned.startswith("```json"):
-            cleaned = cleaned[7:]
-        elif cleaned.startswith("```"):
-            cleaned = cleaned[3:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3]
-        cleaned = cleaned.strip()
+            
+        cleaned2 = response2.strip()
+        if cleaned2.startswith("```json"): cleaned2 = cleaned2[7:]
+        elif cleaned2.startswith("```"): cleaned2 = cleaned2[3:]
+        if cleaned2.endswith("```"): cleaned2 = cleaned2[:-3]
+        cleaned2 = cleaned2.strip()
         
-        is_json_array = False
-        
-        if cleaned.startswith("[") and cleaned.endswith("]"):
-            try:
-                files_to_read = json.loads(cleaned)
-                if isinstance(files_to_read, list):
-                    is_json_array = True
-            except Exception:
-                pass
+        try:
+            files_to_read = json.loads(cleaned2)
+            if isinstance(files_to_read, list):
+                new_files = [f for f in files_to_read if str(f).endswith(".md") and f not in visited_files]
+                if not new_files:
+                    print(f"[Hop {current_hop}] Agent 2 requested no new valid files. Force synthesizing next hop...")
+                    current_hop = max_hops + 1
+                    continue
                 
-        if is_json_array:
-            new_files = [f for f in files_to_read if str(f).endswith(".md") and f not in visited_files]
-            if not new_files:
-                print(f"[Hop {current_hop}] LLM requested no new valid files. Force answering...")
+                print(f"[Hop {current_hop}] Agent 2 elected to read: {new_files}")
+                visited_files.update(new_files)
+                current_hop += 1
+                continue
+            else:
+                print(f"[Hop {current_hop}] Agent 2 failed to output a JSON list. Force synthesizing next hop...")
                 current_hop = max_hops + 1
                 continue
-                
-            print(f"[Hop {current_hop}] LLM elected to read: {new_files}")
-            visited_files.update(new_files)
-            current_hop += 1
+        except Exception as e:
+            print(f"[Hop {current_hop}] Agent 2 JSON parsing failed: {e}. Output was: {cleaned2}. Force synthesizing...")
+            current_hop = max_hops + 1
             continue
-            
-        # If it's not a JSON list, we assume it's the final answer
-        print("\n--- Final Answer ---\n")
-        print(cleaned)
-        print("\n--------------\n")
-        log_action("query", f"Answered '{question}' in {current_hop} hops. Visited: {list(visited_files)}")
-        return
+
 
     # If we hit max hops and loop finishes, do final synthesis
     print(f"\n[!] Max hops reached. Formulating final answer with gathered context...")
@@ -880,14 +920,20 @@ Your response MUST be EITHER a valid JSON list of filenames OR a string represen
             with open(path, "r", encoding="utf-8") as f:
                 context += f"--- {vf} ---\n{f.read()}\n\n"
     
-    prompt = f"Using ONLY the following gathered context, answer the user's question. If you cannot answer it, say so.\nContext:\n{context}\n\nQuestion: {question}"
-    final_answer = query_llm([{"role": "user", "content": prompt}], system_prompt="You are a helpful analyst.")
+    prompt = f"Using ONLY the following gathered context, answer the user's question. Try your best to piece together a helpful response, even if the information is partial or scattered. Be exhaustive with the facts provided.\nContext:\n{context}\n\nQuestion: {question}"
+    final_answer = query_llm([{"role": "user", "content": prompt}], system_prompt="You are a resilient and helpful analyst.")
     
     if final_answer:
+        ans = final_answer.strip()
+        if visited_files:
+            sources_str = ", ".join([f.replace(".md", "") for f in visited_files])
+            ans += f"\n\n---\n**Sources Consulted:** {sources_str}"
+            
         print("\n--- Final Answer ---\n")
-        print(final_answer)
+        print(ans)
         print("\n--------------\n")
         log_action("query", f"Answered '{question}' (Hit max hops={max_hops}). Visited: {list(visited_files)}")
+        return ans
 
 def lint_hygiene():
     print("Running Daily Hygiene (Targeted Sub-Graph)...")
