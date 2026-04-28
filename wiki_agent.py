@@ -64,6 +64,10 @@ import re
 import argparse
 import shutil
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
+file_write_lock = threading.Lock()
 
 try:
     import pypdf
@@ -366,25 +370,26 @@ def update_backlinks(filename, content):
                 backlink_sources = [row[0] for row in cur.fetchall()]
                 
                 target_path = os.path.join(PAGES_DIR, f_name)
-                if os.path.exists(target_path):
-                    with open(target_path, "r", encoding="utf-8") as f:
-                        file_content = f.read()
-                        
-                    # Clean out the old section
-                    parts = file_content.split("## Backlinks")
-                    main_body = parts[0].strip()
-                    
-                    if backlink_sources:
-                        backlink_section = "\n\n## Backlinks\n"
-                        for s in sorted(backlink_sources):
-                            display = s.replace(".md", "").replace("_", " ")
-                            backlink_section += f"- [{display}]({s})\n"
+                with file_write_lock:
+                    if os.path.exists(target_path):
+                        with open(target_path, "r", encoding="utf-8") as f:
+                            file_content = f.read()
                             
-                        with open(target_path, "w", encoding="utf-8") as f:
-                            f.write(main_body + backlink_section)
-                    else:
-                        with open(target_path, "w", encoding="utf-8") as f:
-                            f.write(main_body + "\n")
+                        # Clean out the old section
+                        parts = file_content.split("## Backlinks")
+                        main_body = parts[0].strip()
+                        
+                        if backlink_sources:
+                            backlink_section = "\n\n## Backlinks\n"
+                            for s in sorted(backlink_sources):
+                                display = s.replace(".md", "").replace("_", " ")
+                                backlink_section += f"- [{display}]({s})\n"
+                                
+                            with open(target_path, "w", encoding="utf-8") as f:
+                                f.write(main_body + backlink_section)
+                        else:
+                            with open(target_path, "w", encoding="utf-8") as f:
+                                f.write(main_body + "\n")
                             
     except Exception as e:
         print(f"Error updating backlinks for {filename}: {e}")
@@ -393,8 +398,9 @@ def update_backlinks(filename, content):
 
 def log_action(action, details):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d")
-    with open("log.md", "a", encoding="utf-8") as f:
-        f.write(f"## [{timestamp}] {action} | {details}\n")
+    with file_write_lock:
+        with open("log.md", "a", encoding="utf-8") as f:
+            f.write(f"## [{timestamp}] {action} | {details}\n")
     print(f"[{action}] {details}")
 
 def get_existing_entities():
@@ -414,14 +420,15 @@ def merge_and_save_entity(filename, new_content, cascade=True):
     final_content_to_save = None
 
     if os.path.exists(target_path):
-        # Archive old version
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        archive_name = f"{filename.replace('.md', '')}_{timestamp}.md"
-        shutil.copy2(target_path, os.path.join(ARCHIVE_DIR, archive_name))
-        
-        # Read old content
-        with open(target_path, "r", encoding="utf-8") as f:
-            old_content = f.read()
+        with file_write_lock:
+            # Archive old version
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            archive_name = f"{filename.replace('.md', '')}_{timestamp}.md"
+            shutil.copy2(target_path, os.path.join(ARCHIVE_DIR, archive_name))
+            
+            # Read old content
+            with open(target_path, "r", encoding="utf-8") as f:
+                old_content = f.read()
             
         print(f"Consolidating existing entity: {filename}...")
         
@@ -452,8 +459,9 @@ Return ONLY the fully merged, comprehensive markdown representation.
             if merged_content.startswith("```"): merged_content = merged_content[3:]
             if merged_content.endswith("```"): merged_content = merged_content[:-3]
             final_content_to_save = merged_content.strip()
-            with open(target_path, "w", encoding="utf-8") as f:
-                f.write(final_content_to_save)
+            with file_write_lock:
+                with open(target_path, "w", encoding="utf-8") as f:
+                    f.write(final_content_to_save)
             print(f"Merged and Updated {target_path}")
     else:
         prompt = f"""
@@ -485,8 +493,9 @@ Return ONLY the beautifully formatted markdown code.
              final_content = cleaned.strip()
 
         final_content_to_save = final_content
-        with open(target_path, "w", encoding="utf-8") as f:
-            f.write(final_content_to_save)
+        with file_write_lock:
+            with open(target_path, "w", encoding="utf-8") as f:
+                f.write(final_content_to_save)
         print(f"Created {target_path}")
         
     if final_content_to_save:
@@ -495,11 +504,12 @@ Return ONLY the beautifully formatted markdown code.
         
         if cascade:
             link_pattern = re.compile(r'\[.*?\]\((?:pages/)?(.*?\.md)\)')
-            targets = set(link_pattern.findall(final_content_to_save))
+            targets = set(link_pattern.findall(new_content))
             if targets:
-                sentences = final_content_to_save.replace('\n', ' ').split('. ')
-                for t in targets:
-                    if t == filename: continue
+                sentences = new_content.replace('\n', ' ').split('. ')
+                
+                def cascade_task(t):
+                    if t == filename: return
                     target_path_check = os.path.join(PAGES_DIR, t)
                     if os.path.exists(target_path_check):
                         mention_sentences = [s for s in sentences if f"({t})" in s or f"(pages/{t})" in s]
@@ -507,6 +517,9 @@ Return ONLY the beautifully formatted markdown code.
                             context_injection = ". ".join(mention_sentences) + "."
                             print(f"[Cascade] Updating {t} with contextual link from {filename}...")
                             merge_and_save_entity(t, f"New context referencing this topic from {filename}: {context_injection}", cascade=False)
+                            
+                with ThreadPoolExecutor(max_workers=5) as executor:
+                    executor.map(cascade_task, targets)
                             
     return target_path
 
@@ -762,12 +775,13 @@ Here is the raw text to process:
     log_action("ingest", os.path.basename(file_path))
 
 def update_index(new_files):
-    if not os.path.exists("index.md"):
-        with open("index.md", "w", encoding="utf-8") as f:
-            f.write("# LLM Wiki Index\n\n## Entities\n\n## Concepts\n\n## Sources\n")
-            
-    with open("index.md", "r", encoding="utf-8") as f:
-        lines = f.readlines()
+    with file_write_lock:
+        if not os.path.exists("index.md"):
+            with open("index.md", "w", encoding="utf-8") as f:
+                f.write("# LLM Wiki Index\n\n## Entities\n\n## Concepts\n\n## Sources\n")
+                
+        with open("index.md", "r", encoding="utf-8") as f:
+            lines = f.readlines()
 
     modified = False
     
@@ -820,8 +834,9 @@ def update_index(new_files):
             insert_entry(entry, "Entities", name_display)
             
     if modified:
-        with open("index.md", "w", encoding="utf-8") as f:
-            f.writelines(lines)
+        with file_write_lock:
+            with open("index.md", "w", encoding="utf-8") as f:
+                f.writelines(lines)
         print("Updated index.md with new grouped entries.")
 
 def query(question, max_hops=3):
