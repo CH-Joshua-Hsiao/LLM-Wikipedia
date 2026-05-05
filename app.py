@@ -112,14 +112,14 @@ query_mode = st.toggle("🔍 Wiki Query Mode (Enable to trigger Multi-Hop RAG)",
 # Display chat messages
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+        st.markdown(message["content"], unsafe_allow_html=True)
 
 # Input box
 if prompt := st.chat_input("Ask me anything..."):
     # Append User Message
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
-        st.markdown(prompt)
+        st.markdown(prompt, unsafe_allow_html=True)
 
     # Process AI Response
     with st.chat_message("assistant"):
@@ -138,7 +138,7 @@ if prompt := st.chat_input("Ask me anything..."):
                 else:
                     status.update(label="Answer Found", state="complete")
                     
-            st.markdown(wiki_response)
+            st.markdown(wiki_response, unsafe_allow_html=True)
             st.session_state.messages.append({"role": "assistant", "content": wiki_response})
             
         else:
@@ -150,5 +150,5 @@ if prompt := st.chat_input("Ask me anything..."):
                 if not normal_response:
                     normal_response = "Error parsing LLM response."
             
-            st.markdown(normal_response)
+            st.markdown(normal_response, unsafe_allow_html=True)
             st.session_state.messages.append({"role": "assistant", "content": normal_response})
