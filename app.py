@@ -15,6 +15,7 @@ To run this application, type the following command in your terminal:
 """
 import streamlit as st
 import os
+import re
 import tempfile
 import sys
 import contextlib
@@ -23,10 +24,12 @@ import datetime
 import wiki_agent # Import the backend engine
 
 # --- Config & State ---
-st.set_page_config(page_title="LLM Wiki Chat", page_icon="📚", layout="centered")
+st.set_page_config(page_title="Weekly Wiki", page_icon="📖", layout="wide")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "active_wiki_file" not in st.session_state:
+    st.session_state.active_wiki_file = None
 
 # Function to capture printed stdout to show in UI
 @contextlib.contextmanager
@@ -149,62 +152,171 @@ Format your response as a comprehensive, structured text article focusing purely
                      status.update(label="Failed to generate summary.", state="error")
 
 # --- Chat UI ---
-st.title("💬 LLM Wiki Assistant")
+chat_col, wiki_col = st.columns([6, 4])
 
-query_mode = st.toggle("🔍 Wiki Query Mode (Enable to trigger Multi-Hop RAG)", value=False)
+with chat_col:
+    st.title("💬 Weekly Wiki")
 
-# Display chat messages
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"], unsafe_allow_html=True)
+    query_mode = st.toggle("🔍 Wiki Query Mode (Enable to trigger Multi-Hop RAG)", value=False)
 
-# Input box
-if prompt := st.chat_input("Ask me anything..."):
-    # Append User Message
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt, unsafe_allow_html=True)
+    # Display chat messages
+    for idx, message in enumerate(st.session_state.messages):
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"], unsafe_allow_html=True)
+            if message.get("sources"):
+                cols = st.columns(min(len(message["sources"]), 4))
+                for i, (name, path) in enumerate(message["sources"]):
+                    if cols[i % 4].button(f"📄 {name}", key=f"hist_btn_{idx}_{i}"):
+                        st.session_state.active_wiki_file = path
 
-    # Process AI Response
-    with st.chat_message("assistant"):
-        if query_mode:
-            # Trigger wiki multi-hop
-            with st.status("Consulting Wiki Database...", expanded=True) as status:
-                st_placeholder = st.empty()
+    # Input box
+    if prompt := st.chat_input("Ask me anything..."):
+        # Append User Message
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt, unsafe_allow_html=True)
+
+        # Process AI Response
+        with st.chat_message("assistant"):
+            if query_mode:
+                # Trigger wiki multi-hop
+                with st.status("Consulting Wiki Database...", expanded=True) as status:
+                    st_placeholder = st.empty()
+                    
+                    injected_prompt = prompt
+                    if os.path.exists(user_file_path):
+                        with open(user_file_path, "r", encoding="utf-8") as f:
+                            pref = f.read().strip()
+                        if pref:
+                            injected_prompt = f"[User QA Preference: You are answering {user_id}. Follow these rules closely:\n{pref}]\n\nUser Question: {prompt}"
+                    
+                    wiki_response = wiki_agent.query(injected_prompt, divisions=selected_divisions, max_hops=3, st_placeholder=st_placeholder)
+                    
+                    if not wiki_response:
+                        wiki_response = "Sorry, I could not find an answer in the database."
+                        status.update(label="Search Failed", state="error")
+                    else:
+                        status.update(label="Answer Found", state="complete")
+                        
+                st.markdown(wiki_response, unsafe_allow_html=True)
+                sources = []
+                if "**Sources Consulted:**" in wiki_response:
+                    sources_part = wiki_response.split("**Sources Consulted:**")[1]
+                    sources = re.findall(r"\[([^\]]+)\]\(([^)]+\.md)\)", sources_part)
                 
-                injected_prompt = prompt
+                st.session_state.messages.append({"role": "assistant", "content": wiki_response, "sources": sources})
+                st.rerun()
+                
+            else:
+                # Normal conversational mode
+                full_context = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
+                
+                system_prompt = "You are a helpful AI assistant. Use context from the current chat only."
                 if os.path.exists(user_file_path):
                     with open(user_file_path, "r", encoding="utf-8") as f:
                         pref = f.read().strip()
                     if pref:
-                        injected_prompt = f"[User QA Preference: You are answering {user_id}. Follow these rules closely:\n{pref}]\n\nUser Question: {prompt}"
+                        system_prompt += f"\n\nUser QA Preference (You are answering {user_id}):\n{pref}"
                 
-                wiki_response = wiki_agent.query(injected_prompt, divisions=selected_divisions, max_hops=3, st_placeholder=st_placeholder)
+                with st.spinner("Thinking..."):
+                    normal_response = wiki_agent.query_llm(full_context, system_prompt=system_prompt)
+                    if not normal_response:
+                        normal_response = "Error parsing LLM response."
                 
-                if not wiki_response:
-                    wiki_response = "Sorry, I could not find an answer in the database."
-                    status.update(label="Search Failed", state="error")
-                else:
-                    status.update(label="Answer Found", state="complete")
+                st.markdown(normal_response, unsafe_allow_html=True)
+                st.session_state.messages.append({"role": "assistant", "content": normal_response})
+
+
+with wiki_col:
+    st.title("📖 Wiki Viewer")
+    st.markdown("---")
+    if st.session_state.active_wiki_file and os.path.exists(st.session_state.active_wiki_file):
+        current_file = st.session_state.active_wiki_file
+        st.subheader(os.path.basename(current_file).replace(".md", "").replace("_", " "))
+        
+        with open(current_file, "r", encoding="utf-8") as f:
+            wiki_md = f.read()
+        
+        # Render the wiki page content (internal links appear as plain text hyperlinks, non-clickable)
+        st.markdown(wiki_md, unsafe_allow_html=True)
+        
+        # --- Related Pages Navigation ---
+        # Scan the markdown for all internal .md links and render them as buttons
+        internal_links = re.findall(r'\[([^\]]+)\]\(([^)]*\.md)\)', wiki_md)
+        
+        # Scan for raw source file links (pdf, docx, xlsx, txt, csv, json) in References section
+        raw_links = re.findall(r'\[([^\]]+)\]\(([^)]+\.(?:pdf|docx|xlsx|txt|csv|json|pptx))\)', wiki_md, re.IGNORECASE)
+        
+        if internal_links:
+            st.markdown("---")
+            st.markdown("**🔗 Related Pages**")
+            
+            # Resolve the absolute path of each link relative to the current wiki file's directory
+            current_dir = os.path.dirname(current_file)
+            # Also search parent and pages/ subdirectory for robustness
+            base_ns_dir = os.path.dirname(current_dir)  # e.g. namespaces/PPD
+            
+            btn_cols = st.columns(min(len(internal_links), 3))
+            rendered = set()
+            for i, (link_text, link_path) in enumerate(internal_links):
+                if link_text in rendered:
+                    continue
+                rendered.add(link_text)
+                
+                # Try resolving the path in several ways to handle LLM inconsistencies
+                candidates = [
+                    os.path.normpath(os.path.join(current_dir, link_path)),                 # relative to current file
+                    os.path.normpath(os.path.join(base_ns_dir, link_path)),                 # relative to namespace root
+                    os.path.normpath(os.path.join(base_ns_dir, "pages", os.path.basename(link_path))),  # always in pages/
+                    os.path.normpath(os.path.join(current_dir, os.path.basename(link_path))), # just filename in same dir
+                ]
+                resolved = next((c for c in candidates if os.path.exists(c)), None)
+                
+                if resolved:
+                    if btn_cols[i % 3].button(f"📄 {link_text}", key=f"wiki_nav_{i}_{link_text}"):
+                        st.session_state.active_wiki_file = resolved
+                        st.rerun()
+        
+        # --- Raw Source Files ---
+        if raw_links:
+            st.markdown("---")
+            st.markdown("**📎 Raw Source Files**")
+            
+            rendered_raw = set()
+            for raw_text, raw_path in raw_links:
+                raw_basename = os.path.basename(raw_path)
+                if raw_basename in rendered_raw:
+                    continue
+                rendered_raw.add(raw_basename)
+                
+                # Try to resolve the raw file path
+                candidates = [
+                    os.path.normpath(raw_path),                                                              # as-is (relative to CWD)
+                    os.path.normpath(os.path.join(current_dir, raw_path)),                                   # relative to wiki file
+                    os.path.normpath(os.path.join(base_ns_dir, raw_path)),                                   # relative to namespace
+                    os.path.normpath(os.path.join(base_ns_dir, "raw", raw_basename)),                        # always in raw/
+                    os.path.normpath(os.path.join(current_dir, "raw", raw_basename)),                        # raw/ next to pages/
+                ]
+                resolved_raw = next((c for c in candidates if os.path.exists(c)), None)
+                
+                if resolved_raw:
+                    ext = os.path.splitext(resolved_raw)[1].lower()
+                    with open(resolved_raw, "rb") as rf:
+                        raw_bytes = rf.read()
                     
-            st.markdown(wiki_response, unsafe_allow_html=True)
-            st.session_state.messages.append({"role": "assistant", "content": wiki_response})
-            
-        else:
-            # Normal conversational mode
-            full_context = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
-            
-            system_prompt = "You are a helpful AI assistant. Use context from the current chat only."
-            if os.path.exists(user_file_path):
-                with open(user_file_path, "r", encoding="utf-8") as f:
-                    pref = f.read().strip()
-                if pref:
-                    system_prompt += f"\n\nUser QA Preference (You are answering {user_id}):\n{pref}"
-            
-            with st.spinner("Thinking..."):
-                normal_response = wiki_agent.query_llm(full_context, system_prompt=system_prompt)
-                if not normal_response:
-                    normal_response = "Error parsing LLM response."
-            
-            st.markdown(normal_response, unsafe_allow_html=True)
-            st.session_state.messages.append({"role": "assistant", "content": normal_response})
+                    col_dl, col_preview = st.columns([1, 3])
+                    col_dl.download_button(
+                        label=f"⬇️ {raw_basename}",
+                        data=raw_bytes,
+                        file_name=raw_basename,
+                        key=f"dl_{raw_basename}"
+                    )
+                    # Preview text-based files inline
+                    if ext == ".txt":
+                        with col_preview.expander(f"Preview: {raw_basename}"):
+                            st.code(raw_bytes.decode("utf-8", errors="replace"), language="text")
+                else:
+                    st.caption(f"⚠️ {raw_basename} — file not found on server")
+    else:
+        st.info("👈 Click a source button in the chat to view the Wiki page here.")
+
