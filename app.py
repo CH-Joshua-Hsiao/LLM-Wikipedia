@@ -44,6 +44,7 @@ with st.sidebar:
     st.title("📚 Wiki Admin")
     st.subheader("Data Upload")
     uploaded_file = st.file_uploader("Upload Data (PDF, DOCX, XLSX, JSON, TXT)", type=['pdf', 'docx', 'xlsx', 'json', 'txt'])
+    ingest_div = st.text_input("Target Division for Ingest (e.g. PPD)", value="General")
     
     if uploaded_file is not None:
         if st.button("Ingest File", type="primary"):
@@ -55,12 +56,18 @@ with st.sidebar:
                 
                 # Capture standard output from wiki_agent to display in Streamlit
                 with capture_stdout() as output:
-                    wiki_agent.ingest(tmp_path)
+                    wiki_agent.ingest(tmp_path, division=ingest_div)
                 
                 logs = output.getvalue()
                 st.code(logs, language="text")
                 status.update(label="Ingestion Complete!", state="complete", expanded=False)
     
+    st.markdown("---")
+    st.subheader("Query Scope")
+    available_divisions = []
+    if os.path.exists("namespaces"):
+        available_divisions = [d for d in os.listdir("namespaces") if os.path.isdir(os.path.join("namespaces", d))]
+    selected_divisions = st.multiselect("Select Divisions to Query", options=available_divisions, default=available_divisions)
     st.markdown("---")
     st.subheader("Knowledge Compounding")
     st.markdown("Extract insights from your chat history and save them to the Wiki.")
@@ -95,7 +102,7 @@ Format your response as a comprehensive, structured text article focusing purely
                      sys.stdout.write("Summarization complete. Handing off to Wiki Ingest Engine...\n")
                      
                      with capture_stdout() as output:
-                         wiki_agent.ingest(tmp_path)
+                         wiki_agent.ingest(tmp_path, division=ingest_div)
                          
                      logs = output.getvalue()
                      st.code(logs, language="text")
@@ -126,11 +133,8 @@ if prompt := st.chat_input("Ask me anything..."):
         if query_mode:
             # Trigger wiki multi-hop
             with st.status("Consulting Wiki Database...", expanded=True) as status:
-                with capture_stdout() as output:
-                    wiki_response = wiki_agent.query(prompt, max_hops=3)
-                
-                logs = output.getvalue()
-                st.code(logs, language="text") # Show the hops
+                st_placeholder = st.empty()
+                wiki_response = wiki_agent.query(prompt, divisions=selected_divisions, max_hops=3, st_placeholder=st_placeholder)
                 
                 if not wiki_response:
                     wiki_response = "Sorry, I could not find an answer in the database."

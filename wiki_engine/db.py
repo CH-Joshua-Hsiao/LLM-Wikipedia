@@ -18,20 +18,24 @@ def init_db():
             cur.execute("""
             CREATE TABLE IF NOT EXISTS wiki_entities (
                 id SERIAL PRIMARY KEY,
-                name TEXT UNIQUE NOT NULL,
-                embedding vector
+                division TEXT NOT NULL,
+                name TEXT NOT NULL,
+                embedding vector,
+                UNIQUE(division, name)
             );
             """)
             cur.execute("""
             CREATE TABLE IF NOT EXISTS wiki_links (
+                division TEXT NOT NULL,
                 source_file TEXT NOT NULL,
                 target_file TEXT NOT NULL,
-                PRIMARY KEY (source_file, target_file)
+                PRIMARY KEY (division, source_file, target_file)
             );
             """)
             cur.execute("""
             CREATE TABLE IF NOT EXISTS wiki_claims (
                 id SERIAL PRIMARY KEY,
+                division TEXT NOT NULL,
                 source_file TEXT NOT NULL,
                 claim_text TEXT NOT NULL,
                 embedding vector

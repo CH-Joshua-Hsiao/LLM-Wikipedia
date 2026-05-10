@@ -18,17 +18,18 @@ def log_action(action, details):
             f.write(f"## [{timestamp}] {action} | {details}\n")
     print(f"[{action}] {details}")
 
-def get_existing_entities():
+def get_existing_entities(division):
     """Return a list of known entities for taxonomy cross-referencing."""
     entities = []
-    if os.path.exists(config.PAGES_DIR):
-        for file in os.listdir(config.PAGES_DIR):
+    pages_dir = config.get_pages_dir(division)
+    if os.path.exists(pages_dir):
+        for file in os.listdir(pages_dir):
             if file.endswith(".md"):
                 entities.append(file.replace(".md", ""))
     return entities
 
-def resolve_entity(raw_name):
-    """Calculates vector, checks Postgres, uses LLM if close matches found."""
+def resolve_entity(raw_name, division):
+    """Calculates vector, checks Postgres within the division, uses LLM if close matches found."""
     if not psycopg2:
         return raw_name 
     
@@ -44,7 +45,7 @@ def resolve_entity(raw_name):
     try:
         register_vector(conn)
         with conn.cursor() as cur:
-            cur.execute("SELECT name FROM wiki_entities WHERE name = %s;", (raw_name,))
+            cur.execute("SELECT name FROM wiki_entities WHERE name = %s AND division = %s;", (raw_name, division))
             exact = cur.fetchone()
             if exact:
                 return exact[0]
@@ -53,9 +54,10 @@ def resolve_entity(raw_name):
             cur.execute("""
                 SELECT name, embedding <=> %s::vector AS distance 
                 FROM wiki_entities 
+                WHERE division = %s
                 ORDER BY distance ASC 
                 LIMIT 3;
-            """, (vec_literal,))
+            """, (vec_literal, division))
             
             candidates = cur.fetchall()
             # Loosen mathematical threshold significantly to cast a wider net; rely on the LLM veto.
@@ -63,7 +65,7 @@ def resolve_entity(raw_name):
             
             # String based similarity check
             import difflib
-            cur.execute("SELECT name FROM wiki_entities;")
+            cur.execute("SELECT name FROM wiki_entities WHERE division = %s;", (division,))
             all_names = [row[0] for row in cur.fetchall()]
             string_candidates = difflib.get_close_matches(raw_name, all_names, n=3, cutoff=0.6)
             for sc in string_candidates:
@@ -103,7 +105,7 @@ If it is a distinct, separate entity, output: {{"match": false, "name": null}}
                      except Exception as e:
                          pass
                         
-            cur.execute("INSERT INTO wiki_entities (name, embedding) VALUES (%s, %s::vector) ON CONFLICT (name) DO NOTHING;", (raw_name, vec_literal))
+            cur.execute("INSERT INTO wiki_entities (division, name, embedding) VALUES (%s, %s, %s::vector) ON CONFLICT (division, name) DO NOTHING;", (division, raw_name, vec_literal))
             return raw_name
             
     except Exception as e:

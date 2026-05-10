@@ -45,7 +45,7 @@ Respond ONLY with the Date in 'YYYY-MM-DD' format (if a specific day) or 'YYYY-M
     return "Unknown Date"
 
 
-def extract_and_embed_claims(filename, content):
+def extract_and_embed_claims(filename, content, division):
     """Asks LLM to pull claims from text, embeds them, and shoves them into PostgreSQL wiki_claims table."""
     conn = init_db()
     if not conn: return
@@ -73,19 +73,19 @@ Document:
         if isinstance(claims, list):
             register_vector(conn)
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM wiki_claims WHERE source_file = %s;", (filename,))
+                cur.execute("DELETE FROM wiki_claims WHERE source_file = %s AND division = %s;", (filename, division))
                 for claim in claims:
                     vec = embed_text(claim)
                     if vec:
                         vec_literal = "[" + ",".join(map(str, vec)) + "]"
-                        cur.execute("INSERT INTO wiki_claims (source_file, claim_text, embedding) VALUES (%s, %s, %s::vector);", (filename, claim, vec_literal))
+                        cur.execute("INSERT INTO wiki_claims (division, source_file, claim_text, embedding) VALUES (%s, %s, %s, %s::vector);", (division, filename, claim, vec_literal))
             print(f"Embedded {len(claims)} fact claims for {filename} into vector storage.")
     except Exception as e:
         print(f"Failed to parse claims JSON for {filename}: {e}")
     finally:
         conn.close()
 
-def update_backlinks(filename, content):
+def update_backlinks(filename, content, division):
     """Parses new content for edges, upserts to DB, and rewrites target files locally."""
     conn = init_db()
     if not conn: return
@@ -97,14 +97,14 @@ def update_backlinks(filename, content):
     try:
         with conn.cursor() as cur:
             # 1. Store old targets before deletion so we can refresh them (to remove stale links)
-            cur.execute("SELECT target_file FROM wiki_links WHERE source_file = %s;", (filename,))
+            cur.execute("SELECT target_file FROM wiki_links WHERE source_file = %s AND division = %s;", (filename, division))
             old_targets = set(row[0] for row in cur.fetchall())
             
             # 2. Update Knowledge Graph database
-            cur.execute("DELETE FROM wiki_links WHERE source_file = %s;", (filename,))
+            cur.execute("DELETE FROM wiki_links WHERE source_file = %s AND division = %s;", (filename, division))
             if targets:
                 for t in targets:
-                    cur.execute("INSERT INTO wiki_links (source_file, target_file) VALUES (%s, %s) ON CONFLICT DO NOTHING;", (filename, t))
+                    cur.execute("INSERT INTO wiki_links (division, source_file, target_file) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING;", (division, filename, t))
                     
             # 3. Refresh Backlinks section in markdown for ALL affected pages
             # This includes new targets, removed targets, AND the current ingested file itself.
@@ -112,10 +112,10 @@ def update_backlinks(filename, content):
             files_to_refresh.add(filename)
             
             for f_name in files_to_refresh:
-                cur.execute("SELECT source_file FROM wiki_links WHERE target_file = %s;", (f_name,))
+                cur.execute("SELECT source_file FROM wiki_links WHERE target_file = %s AND division = %s;", (f_name, division))
                 backlink_sources = [row[0] for row in cur.fetchall()]
                 
-                target_path = os.path.join(config.PAGES_DIR, f_name)
+                target_path = os.path.join(config.get_pages_dir(division), f_name)
                 with config.file_write_lock:
                     if os.path.exists(target_path):
                         with open(target_path, "r", encoding="utf-8") as f:
@@ -142,9 +142,9 @@ def update_backlinks(filename, content):
     finally:
         conn.close()
 
-def merge_and_save_entity(filename, new_content, cascade=True, report_date=None):
-    target_path = os.path.join(config.PAGES_DIR, filename)
-    taxonomy = get_existing_entities()
+def merge_and_save_entity(filename, new_content, division, cascade=True, report_date=None):
+    target_path = os.path.join(config.get_pages_dir(division), filename)
+    taxonomy = get_existing_entities(division)
     taxonomy_str = ", ".join(taxonomy)
 
     final_content_to_save = None
@@ -154,7 +154,7 @@ def merge_and_save_entity(filename, new_content, cascade=True, report_date=None)
             # Archive old version
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             archive_name = f"{filename.replace('.md', '')}_{timestamp}.md"
-            shutil.copy2(target_path, os.path.join(config.ARCHIVE_DIR, archive_name))
+            shutil.copy2(target_path, os.path.join(config.get_archive_dir(division), archive_name))
             
             # Read old content
             with open(target_path, "r", encoding="utf-8") as f:
@@ -170,6 +170,8 @@ Keep all historical facts, seamlessly weave in the new facts, and format beautif
 CRITICAL RULE: Be extremely exhaustive and dense! Extract every single important fact, metric, timeline, and nuanced detail from the text. Prioritize raw numbers, financial metrics, technical specifications, and quantitative data. 
 
 TIMELINE/CHRONOLOGICAL RULE: {date_instruction}Maintain a `## Timeline` or `## Chronological History` section. When adding the New Data, DO NOT just append it to the end. You MUST insert the new facts into the proper chronological order within the timeline section, as reports may be ingested out of sequence. Ensure dates are explicitly stated for these new facts.
+
+CITATION RULE: Ensure all facts in the text are followed by an academic inline citation (e.g., [1], [2]). At the bottom of the document, maintain a `## References` section mapping these numbers to their original sources. The Existing Document and New Data will contain their source links. Consolidate them intelligently.
 
 STRICT RULE: Do NOT invent, hallucinate, or add supplemental knowledge from your own training data. Only use facts explicitly present in the Existing Document and the New Data. Stay 100% faithful to the provided text.
 
@@ -208,6 +210,8 @@ TIMELINE/CHRONOLOGICAL RULE: {date_instruction}If there is chronological data or
 
 CRITICAL RULE: Be extremely exhaustive and dense! Extract every single important fact, metric, timeline, and nuanced detail from the text. Prioritize raw numbers, financial metrics, hardware specifications, and any quantitative analysis. 
 
+CITATION RULE: Ensure all facts in the text are followed by an academic inline citation (e.g., [1]). At the bottom of the document, create a `## References` section mapping this number to the source link provided in the Raw Data Content.
+
 STRICT RULE: Do NOT invent, hallucinate, or add supplemental knowledge from your own training data. Provide a wiki summary strictly based on the provided Raw Data Content. Do not fill in missing background information yourself.
 
 Ensure the output includes a `# Title`, the `**Type**`, and retains the `**Source**` link from the original data.
@@ -236,8 +240,8 @@ Return ONLY the beautifully formatted markdown code.
         print(f"Created {target_path}")
         
     if final_content_to_save:
-        extract_and_embed_claims(filename, final_content_to_save)
-        update_backlinks(filename, final_content_to_save)
+        extract_and_embed_claims(filename, final_content_to_save, division)
+        update_backlinks(filename, final_content_to_save, division)
         
         if cascade:
             link_pattern = re.compile(r'\[.*?\]\((?:pages/)?(.*?\.md)\)')
@@ -247,26 +251,27 @@ Return ONLY the beautifully formatted markdown code.
                 
                 def cascade_task(t):
                     if t == filename: return
-                    target_path_check = os.path.join(config.PAGES_DIR, t)
+                    target_path_check = os.path.join(config.get_pages_dir(division), t)
                     if os.path.exists(target_path_check):
                         mention_sentences = [s for s in sentences if f"({t})" in s or f"(pages/{t})" in s]
                         if mention_sentences:
                             context_injection = ". ".join(mention_sentences) + "."
                             print(f"[Cascade] Updating {t} with contextual link from {filename}...")
-                            merge_and_save_entity(t, f"New context referencing this topic from {filename}: {context_injection}", cascade=False)
+                            merge_and_save_entity(t, f"New context referencing this topic from {filename}: {context_injection}", division, cascade=False)
                             
                 with ThreadPoolExecutor(max_workers=5) as executor:
                     executor.map(cascade_task, targets)
                             
     return target_path
 
-def update_index(new_files):
+def update_index(new_files, division):
     with config.file_write_lock:
-        if not os.path.exists("index.md"):
-            with open("index.md", "w", encoding="utf-8") as f:
+        index_path = config.get_index_path(division)
+        if not os.path.exists(index_path):
+            with open(index_path, "w", encoding="utf-8") as f:
                 f.write("# LLM Wiki Index\n\n## Entities\n\n## Concepts\n\n## Sources\n")
                 
-        with open("index.md", "r", encoding="utf-8") as f:
+        with open(index_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
     modified = False
@@ -306,7 +311,7 @@ def update_index(new_files):
             elif re.search(r'\*\*type\*\*\s*:\s*entity', file_content, re.IGNORECASE):
                 item_type = "entity"
 
-        entry = f"- [{name_display}]({config.PAGES_DIR}/{filename}){desc}"
+        entry = f"- [{name_display}](namespaces/{division}/pages/{filename}){desc}"
 
         if item_type == "concept":
             insert_entry(entry, "Concepts", name_display)
@@ -315,7 +320,7 @@ def update_index(new_files):
             
     if modified:
         with config.file_write_lock:
-            with open("index.md", "w", encoding="utf-8") as f:
+            with open(index_path, "w", encoding="utf-8") as f:
                 f.writelines(lines)
         print("Updated index.md with new grouped entries.")
 
@@ -352,7 +357,7 @@ def extract_text_from_file(file_path):
             with open(file_path, "r", encoding="utf-8") as f: return f.read()
         except Exception as e: return f"Error extracting: {e}"
 
-def handle_excel_ingest(file_path):
+def handle_excel_ingest(file_path, division):
     if not pd:
         print("Error: pandas and openpyxl are missing. Run 'pip install pandas openpyxl'.")
         return
@@ -376,8 +381,9 @@ CRITICAL RULE: Filenames MUST represent globally unique Root Entities (e.g., 'Ap
 DO NOT extract purely metadata, numeric IDs, arbitrary strings, or meaningless labels (e.g. 'Author_44211', 'Page_2', 'Header', 'Conference_Call_Participants', 'Q3_Earnings_Summary') as entities. 'Concepts' MUST be broad industry phenomena, profound topics, or notable events (e.g., 'AI Supercycle', 'Supply Chain Shortage'), NOT structural document sections. Only extract genuine nouns such as specific people, companies, named technologies, organizations, and profound Concepts.
 CRITICAL RULE: Be extremely exhaustive and dense! Extract every single important fact, metric, financial ratio, timeline, and nuanced detail from the dataset. Do not just summarize broadly; pull the exact numbers, technical specs, and analytical arguments to provide a highly comprehensive and deep encyclopedic entry.
 TIMELINE RULE: The dataset is associated with the date/timeline: {report_date}. Ensure you extract any chronological information, and explicitly prefix facts with their dates in the markdown content to preserve timeline accuracy.
+CITATION RULE: Append an academic inline citation (e.g., [1]) to every fact you extract. At the bottom of the markdown content, create a `## References` section that maps [1] to the source file: [{file_path}]({file_path}).
 STRICT RULE: The generated Python code MUST NOT invent, hallucinate, or add supplemental knowledge. It must strictly map the data from the DataFrame rows using ONLY the provided text.
-Format the markdown 'content' beautifully. Include at least: '# Title', '**Type**: Entity', '**Source**: {file_path}', and map the core data from the row into paragraphs, tables, or lists.
+Format the markdown 'content' beautifully. Include at least: '# Title', '**Type**: Entity', and map the core data from the row into paragraphs, tables, or lists.
 OUTPUT ONLY THE PIPELINE FUNCTION CODE. No explanatory text. No markdown formatting.
 """
         response = query_llm([{"role": "user", "content": prompt}], system_prompt="You are an expert pandas software engineer. Output raw python code only, starting with `def extract_entities(df):`")
@@ -401,21 +407,21 @@ OUTPUT ONLY THE PIPELINE FUNCTION CODE. No explanatory text. No markdown formatt
                 if not filename: 
                     continue
                 raw_name = filename.replace(".md", "").replace("_", " ")
-                resolved_name = resolve_entity(raw_name)
+                resolved_name = resolve_entity(raw_name, division)
                 final_filename = get_safe_filename(resolved_name)
                 content = item.get("content", "")
                 item_type = item.get("type", "entity").lower()
                 
-                target_path = merge_and_save_entity(final_filename, content, report_date=report_date)
+                target_path = merge_and_save_entity(final_filename, content, division, report_date=report_date)
                 new_files.append((final_filename, content, target_path, item_type))
 
-            if new_files: update_index(new_files)
+            if new_files: update_index(new_files, division)
 
         except Exception as e:
             print(f"Failed to execute LLM-written extraction code for sheet '{sheet_name}':\n{e}\n\nGenerated Code:\n{code}")
     log_action("ingest_hybrid_xlsx", os.path.basename(file_path))
 
-def handle_json_ingest(file_path):
+def handle_json_ingest(file_path, division):
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -449,8 +455,9 @@ CRITICAL RULE: Filenames MUST represent globally unique Root Entities (e.g., 'Ap
 DO NOT extract purely metadata, numeric IDs, arbitrary strings, or meaningless labels (e.g. 'Author_44211', 'Page_2', 'Header', 'Conference_Call_Participants', 'Q3_Earnings_Summary') as entities. 'Concepts' MUST be broad industry phenomena, profound topics, or notable events (e.g., 'AI Supercycle', 'Supply Chain Shortage'), NOT structural document sections. Only extract genuine nouns such as specific people, companies, named technologies, organizations, and profound Concepts.
 CRITICAL RULE: Be extremely exhaustive and dense! Extract every single important fact, metric, financial ratio, timeline, and nuanced detail from the dataset. Do not just summarize broadly; pull the exact numbers, technical specs, and analytical arguments to provide a highly comprehensive and deep encyclopedic entry.
 TIMELINE RULE: The dataset is associated with the date/timeline: {report_date}. Ensure you extract any chronological information, and explicitly prefix facts with their dates in the markdown content to preserve timeline accuracy.
+CITATION RULE: Append an academic inline citation (e.g., [1]) to every fact you extract. At the bottom of the markdown content, create a `## References` section that maps [1] to the source file: [{file_path}]({file_path}).
 STRICT RULE: The generated Python code MUST NOT invent, hallucinate, or add supplemental knowledge. It must strictly map the data from the JSON dictionary using ONLY the provided text.
-Format the markdown 'content' beautifully. Include at least: '# Title', '**Type**: Entity', '**Source**: {file_path}', and map the core facts from the JSON into paragraphs, tables, or lists.
+Format the markdown 'content' beautifully. Include at least: '# Title', '**Type**: Entity', and map the core facts from the JSON into paragraphs, tables, or lists.
 OUTPUT ONLY THE PIPELINE FUNCTION CODE. No explanatory text. No markdown formatting.
 """
     response = query_llm([{"role": "user", "content": prompt}], system_prompt="You are an expert Python software engineer. Output raw python code only, starting with `def extract_entities(data):`")
@@ -477,31 +484,32 @@ OUTPUT ONLY THE PIPELINE FUNCTION CODE. No explanatory text. No markdown formatt
             if not filename: 
                 continue
             raw_name = filename.replace(".md", "").replace("_", " ")
-            resolved_name = resolve_entity(raw_name)
+            resolved_name = resolve_entity(raw_name, division)
             final_filename = get_safe_filename(resolved_name)
             content = item.get("content", "")
             item_type = item.get("type", "entity").lower()
             
-            target_path = merge_and_save_entity(final_filename, content, report_date=report_date)
+            target_path = merge_and_save_entity(final_filename, content, division, report_date=report_date)
             new_files.append((final_filename, content, target_path, item_type))
 
-        if new_files: update_index(new_files)
+        if new_files: update_index(new_files, division)
 
     except Exception as e:
         print(f"Failed to execute LLM-written extraction code for JSON:\n{e}\n\nGenerated Code:\n{code}")
     log_action("ingest_hybrid_json", os.path.basename(file_path))
 
-def ingest(file_path):
+def ingest(file_path, division):
+    config.init_directories(division)
     if not os.path.exists(file_path):
         print(f"Error: File '{file_path}' does not exist.")
         return
 
     _, ext = os.path.splitext(file_path.lower())
     if ext == ".xlsx":
-        handle_excel_ingest(file_path)
+        handle_excel_ingest(file_path, division)
         return
     elif ext == ".json":
-        handle_json_ingest(file_path)
+        handle_json_ingest(file_path, division)
         return
 
     print(f"Extracting text from {file_path}...")
@@ -521,6 +529,8 @@ TIMELINE RULE: The text is associated with the date/timeline: {report_date}. Ens
 
 STRICT RULE: Do NOT hallucinate or supplement with outside knowledge. Generate the wiki content purely and strictly using ONLY the information found in the extracted text below. Stay 100% faithful to the source material.
 
+CITATION RULE: Append an academic inline citation (e.g., [1]) to every fact you extract. At the bottom of the markdown content, create a `## References` section that maps [1] to the source file: [{file_path}]({file_path}).
+
 CRITICAL RULE: All filenames MUST represent globally unique Root Entities (e.g., 'Apple_Inc.md', 'iPhone.md', 'Tim_Cook.md'). Distinct and notable products, technologies, people, or platforms SHOULD get their own separate files. NEVER use generic sub-topic names like 'Financials.md' or 'Q2_Earnings.md'. If the extracted data is merely a generic sub-topic of a parent entity, you MUST map it to the parent entity's filename (e.g., 'Apple_Inc.md') and structure the data there.
 DO NOT extract purely metadata, numeric IDs, arbitrary strings, or meaningless labels (e.g. 'Author_44211', 'Page_2', 'Header', 'Conference_Call_Participants', 'Q3_Earnings_Summary') as entities. 'Concepts' MUST be broad industry phenomena, profound topics, or notable events (e.g., 'AI Supercycle', 'Supply Chain Shortage'), NOT structural document sections. Only extract genuine nouns such as specific people, companies, named technologies, organizations, and profound Concepts.
 
@@ -529,13 +539,13 @@ Your output must be strictly in JSON format, like this:
   "entities": [
     {{
       "filename": "Entity_Name.md",
-      "content": "# Entity Name\n\n**Type**: Entity\n**Sources**: [{file_path}]({file_path})\n\n## Overview\nSome information..."
+      "content": "# Entity Name\n\n**Type**: Entity\n\n## Overview\nSome information [1].\n\n## References\n[1] [{file_path}]({file_path})"
     }}
   ],
   "concepts": [
     {{
       "filename": "Concept_Name.md",
-      "content": "# Concept Name\n\n**Type**: Concept\n**Sources**: [{file_path}]({file_path})\n\n## Overview\nSome information..."
+      "content": "# Concept Name\n\n**Type**: Concept\n\n## Overview\nSome information [1].\n\n## References\n[1] [{file_path}]({file_path})"
     }}
   ]
 }}
@@ -564,12 +574,12 @@ Here is the raw text to process:
         if not filename: 
             continue
         raw_name = filename.replace(".md", "").replace("_", " ")
-        resolved_name = resolve_entity(raw_name)
+        resolved_name = resolve_entity(raw_name, division)
         final_filename = get_safe_filename(resolved_name)
         file_content = entity.get("content", "")
         
-        target_path = merge_and_save_entity(final_filename, file_content, report_date=report_date)
+        target_path = merge_and_save_entity(final_filename, file_content, division, report_date=report_date)
         new_files.append((final_filename, file_content, target_path, item_type))
 
-    if new_files: update_index(new_files)
+    if new_files: update_index(new_files, division)
     log_action("ingest", os.path.basename(file_path))
