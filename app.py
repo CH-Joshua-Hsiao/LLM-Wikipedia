@@ -39,8 +39,45 @@ def capture_stdout():
     finally:
          sys.stdout = old_stdout
 
-# --- Sidebar: Ingest & Compounding ---
+# --- Sidebar: User Profile & Admin ---
+if not os.path.exists("users"):
+    os.makedirs("users", exist_ok=True)
+
 with st.sidebar:
+    st.title("👤 User Profile")
+    user_id = st.text_input("User ID", value="guest")
+    user_file_path = os.path.join("users", f"{user_id}.md")
+    
+    current_personality = ""
+    if os.path.exists(user_file_path):
+        with open(user_file_path, "r", encoding="utf-8") as f:
+            current_personality = f.read()
+            
+    with st.expander("📝 Edit Personality / Preferences"):
+        personality_text = st.text_area("Your QA Preferences", value=current_personality, height=150)
+        
+        col1, col2 = st.columns(2)
+        if col1.button("Save Profile"):
+            with open(user_file_path, "w", encoding="utf-8") as f:
+                f.write(personality_text)
+            st.success("Saved!")
+            st.rerun()
+            
+        if col2.button("🧠 Auto-Evolve"):
+            if not st.session_state.messages:
+                st.warning("No chat history.")
+            else:
+                with st.spinner("Analyzing..."):
+                    chat_history = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in st.session_state.messages[-10:]])
+                    evolve_prompt = f"Analyze the following chat history and the user's EXISTING personality profile. Evolve and update the personality profile to better reflect their communication style, language preference, and technical depth. Output ONLY the updated personality profile text.\n\n=== Existing Profile ===\n{current_personality}\n\n=== Chat History ===\n{chat_history}"
+                    new_personality = wiki_agent.query_llm([{"role": "user", "content": evolve_prompt}], system_prompt="You are a behavioral analyst.")
+                    if new_personality:
+                        with open(user_file_path, "w", encoding="utf-8") as f:
+                            f.write(new_personality.strip())
+                        st.success("Evolved!")
+                        st.rerun()
+                        
+    st.markdown("---")
     st.title("📚 Wiki Admin")
     st.subheader("Data Upload")
     uploaded_file = st.file_uploader("Upload Data (PDF, DOCX, XLSX, JSON, TXT)", type=['pdf', 'docx', 'xlsx', 'json', 'txt'])
@@ -134,7 +171,15 @@ if prompt := st.chat_input("Ask me anything..."):
             # Trigger wiki multi-hop
             with st.status("Consulting Wiki Database...", expanded=True) as status:
                 st_placeholder = st.empty()
-                wiki_response = wiki_agent.query(prompt, divisions=selected_divisions, max_hops=3, st_placeholder=st_placeholder)
+                
+                injected_prompt = prompt
+                if os.path.exists(user_file_path):
+                    with open(user_file_path, "r", encoding="utf-8") as f:
+                        pref = f.read().strip()
+                    if pref:
+                        injected_prompt = f"[User QA Preference: You are answering {user_id}. Follow these rules closely:\n{pref}]\n\nUser Question: {prompt}"
+                
+                wiki_response = wiki_agent.query(injected_prompt, divisions=selected_divisions, max_hops=3, st_placeholder=st_placeholder)
                 
                 if not wiki_response:
                     wiki_response = "Sorry, I could not find an answer in the database."
@@ -149,8 +194,15 @@ if prompt := st.chat_input("Ask me anything..."):
             # Normal conversational mode
             full_context = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
             
+            system_prompt = "You are a helpful AI assistant. Use context from the current chat only."
+            if os.path.exists(user_file_path):
+                with open(user_file_path, "r", encoding="utf-8") as f:
+                    pref = f.read().strip()
+                if pref:
+                    system_prompt += f"\n\nUser QA Preference (You are answering {user_id}):\n{pref}"
+            
             with st.spinner("Thinking..."):
-                normal_response = wiki_agent.query_llm(full_context, system_prompt="You are a helpful AI assistant. Use context from the current chat only.")
+                normal_response = wiki_agent.query_llm(full_context, system_prompt=system_prompt)
                 if not normal_response:
                     normal_response = "Error parsing LLM response."
             
