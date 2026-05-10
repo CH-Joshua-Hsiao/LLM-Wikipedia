@@ -41,40 +41,45 @@ def query(question, divisions, max_hops=3, st_placeholder=None):
             if vf in extracted_contexts:
                 context += f"--- Source [{idx}]: {vf} ---\n{extracted_contexts[vf]}\n\n"
                     
-        out(f"\n--- [Hop {current_hop}/{max_hops}] Agent 1: Synthesizing Context ---")
-        prompt1 = f"""
-            You are a highly skeptical analytical agent. The user is asking: "{question}".
-            Today's Date is: {today}.
-            Here is the content of files you have ALREADY read (if any):
-            {context}
+        # Skip Agent 1 synthesis on the first hop — context is always empty,
+        # so it will always return NEED_MORE_INFO. Go straight to routing.
+        if current_hop == 1:
+            out(f"\n--- [Hop {current_hop}/{max_hops}] Skipping synthesis (no context yet). Triggering Agent 2: Routing Index... ---")
+        else:
+            out(f"\n--- [Hop {current_hop}/{max_hops}] Agent 1: Synthesizing Context ---")
+            prompt1 = f"""
+                You are a highly skeptical analytical agent. The user is asking: "{question}".
+                Today's Date is: {today}.
+                Here is the content of files you have ALREADY read (if any):
+                {context}
 
-            Can you fully and comprehensively answer the user's question using ONLY the provided context?
-            CRITICAL INSTRUCTION: Do NOT be overconfident. Review the documents provided. Pay close attention to any Wiki links `[link](...)` or `## Backlinks` mentioned inside the text. If the text mentions a crucial related concept, product variation, competitor, or timeline event that seems highly relevant to the question, but you DO NOT have the full text for it in your context, you MUST output exactly the string: NEED_MORE_INFO to trigger another search round.
-            If you are missing crucial facts, or if the context is entirely empty, you MUST output exactly the string: NEED_MORE_INFO
+                Can you fully and comprehensively answer the user's question using ONLY the provided context?
+                CRITICAL INSTRUCTION: Do NOT be overconfident. Review the documents provided. Pay close attention to any Wiki links `[link](...)` or `## Backlinks` mentioned inside the text. If the text mentions a crucial related concept, product variation, competitor, or timeline event that seems highly relevant to the question, but you DO NOT have the full text for it in your context, you MUST output exactly the string: NEED_MORE_INFO to trigger another search round.
+                If you are missing crucial facts, or if the context is entirely empty, you MUST output exactly the string: NEED_MORE_INFO
 
-            If you are absolutely certain you have ALL the necessary nuances and related information to provide a comprehensive answer, provide your final answer in standard markdown formatting.
-            CRITICAL INSTRUCTION: You MUST use academic inline citations (e.g., [1], [2]) when stating facts, corresponding to the Source IDs provided in the context.
-            CRITICAL INSTRUCTION: Your final answer MUST be written in the exact same language as the user's original question.
-            """
-        response1 = query_llm([{"role": "user", "content": prompt1}], system_prompt="You are an analytical agent.")
-        
-        if not response1:
-            out("Error: Received empty response from LLM (Agent 1).")
-            return
+                If you are absolutely certain you have ALL the necessary nuances and related information to provide a comprehensive answer, provide your final answer in standard markdown formatting.
+                CRITICAL INSTRUCTION: You MUST use academic inline citations (e.g., [1], [2]) when stating facts, corresponding to the Source IDs provided in the context.
+                CRITICAL INSTRUCTION: Your final answer MUST be written in the exact same language as the user's original question.
+                """
+            response1 = query_llm([{"role": "user", "content": prompt1}], system_prompt="You are an analytical agent.")
             
-        if "NEED_MORE_INFO" not in response1.strip():
-            ans = response1.strip()
-            if visited_files:
-                ans += "\n\n---\n**Sources Consulted:**\n"
-                for idx, vf in source_mapping.items():
-                    display_name = vf.split("/")[-1].replace(".md", "")
-                    ans += f"[{idx}] [{display_name}]({vf})\n"
-            
-            out("\n--- Final Answer ---\n")
-            out(ans)
-            out("\n--------------\n")
-            log_action("query", f"Answered '{question}' in {current_hop} hops. Visited: {list(visited_files)}")
-            return ans
+            if not response1:
+                out("Error: Received empty response from LLM (Agent 1).")
+                return
+                
+            if "NEED_MORE_INFO" not in response1.strip():
+                ans = response1.strip()
+                if visited_files:
+                    ans += "\n\n---\n**Sources Consulted:**\n"
+                    for idx, vf in source_mapping.items():
+                        display_name = vf.split("/")[-1].replace(".md", "")
+                        ans += f"[{idx}] [{display_name}]({vf})\n"
+                
+                out("\n--- Final Answer ---\n")
+                out(ans)
+                out("\n--------------\n")
+                log_action("query", f"Answered '{question}' in {current_hop} hops. Visited: {list(visited_files)}")
+                return ans
             
         out(f"[Hop {current_hop}] Context insufficient. Triggering Agent 2: Routing Index...")
         

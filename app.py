@@ -237,8 +237,13 @@ with wiki_col:
         with open(current_file, "r", encoding="utf-8") as f:
             wiki_md = f.read()
         
-        # Render the wiki page content (internal links appear as plain text hyperlinks, non-clickable)
-        st.markdown(wiki_md, unsafe_allow_html=True)
+        # Pre-process: strip internal .md links and raw file links so they don't render as
+        # broken browser hyperlinks. Navigation is handled by buttons at the bottom of the page.
+        display_md = re.sub(r'\[([^\]]+)\]\([^)]*\.md\)', r'**\1**', wiki_md)
+        display_md = re.sub(r'\[([^\]]+)\]\([^)]+\.(?:pdf|docx|xlsx|txt|csv|json|pptx)\)', r'`\1`', display_md, flags=re.IGNORECASE)
+        
+        # Render the wiki page content (internal links stripped, navigation via buttons below)
+        st.markdown(display_md, unsafe_allow_html=True)
         
         # --- Related Pages Navigation ---
         # Scan the markdown for all internal .md links and render them as buttons
@@ -247,14 +252,13 @@ with wiki_col:
         # Scan for raw source file links (pdf, docx, xlsx, txt, csv, json) in References section
         raw_links = re.findall(r'\[([^\]]+)\]\(([^)]+\.(?:pdf|docx|xlsx|txt|csv|json|pptx))\)', wiki_md, re.IGNORECASE)
         
+        # Resolve path helpers — must be computed before both sections below
+        current_dir = os.path.dirname(current_file)
+        base_ns_dir = os.path.dirname(current_dir)  # e.g. namespaces/PPD
+        
         if internal_links:
             st.markdown("---")
             st.markdown("**🔗 Related Pages**")
-            
-            # Resolve the absolute path of each link relative to the current wiki file's directory
-            current_dir = os.path.dirname(current_file)
-            # Also search parent and pages/ subdirectory for robustness
-            base_ns_dir = os.path.dirname(current_dir)  # e.g. namespaces/PPD
             
             btn_cols = st.columns(min(len(internal_links), 3))
             rendered = set()
@@ -311,10 +315,23 @@ with wiki_col:
                         file_name=raw_basename,
                         key=f"dl_{raw_basename}"
                     )
-                    # Preview text-based files inline
+                    # Preview text-based files inline with word wrap
                     if ext == ".txt":
                         with col_preview.expander(f"Preview: {raw_basename}"):
-                            st.code(raw_bytes.decode("utf-8", errors="replace"), language="text")
+                            import html as _html
+                            import streamlit.components.v1 as components
+                            text_content = raw_bytes.decode("utf-8", errors="replace")
+                            escaped = _html.escape(text_content)
+                            line_count = text_content.count('\n') + 1
+                            height = min(max(line_count * 20, 150), 500)
+                            components.html(
+                                f'<html><body style="margin:0;background:#0e1117;">'
+                                f'<pre style="white-space:pre-wrap;word-break:break-word;'
+                                f'font-family:monospace;font-size:13px;color:#fafafa;padding:12px;margin:0;">'
+                                f'{escaped}</pre></body></html>',
+                                height=height,
+                                scrolling=True
+                            )
                 else:
                     st.caption(f"⚠️ {raw_basename} — file not found on server")
     else:

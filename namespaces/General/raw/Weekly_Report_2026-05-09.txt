@@ -1,0 +1,22 @@
+Weekly Report - AI4BI Team
+Date: 2026-05-09
+Author: Joshua Hsiao
+
+== Summary ==
+This week, the AI4BI team completed the initial prototype of the Weekly Wiki agent.
+Key achievements include:
+- Integrated LiteLLM with local Ollama for offline LLM inference.
+- Implemented multi-hop RAG query engine with a max of 3 hops.
+- Successfully ingested 5 research reports into the PostgreSQL vector store.
+- Launched the Streamlit chat interface with dual-pane Wiki Viewer.
+
+== Key Metrics ==
+- Documents Ingested: 5
+- Average Query Latency: 12 seconds
+- Entities Extracted: 23
+- Concepts Extracted: 7
+
+== Next Steps ==
+- Integrate user personality profiles.
+- Add source citation feature for traceability.
+- Deploy on internal Kubernetes cluster.
